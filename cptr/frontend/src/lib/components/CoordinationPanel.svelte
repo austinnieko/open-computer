@@ -18,6 +18,8 @@
 	import { requestConfirm } from '$lib/stores/confirm';
 	import {
 		addCoordDependency,
+		deleteCoordTask,
+		endCoordTask,
 		getCoordTaskDiff,
 		getCoordTaskReadiness,
 		pauseCoordTask,
@@ -43,7 +45,9 @@
 		levelRank,
 		refresh,
 		trackCoordination,
-		worstConflict
+		worstConflict,
+		compactNumber,
+		compactDuration
 	} from '$lib/stores/coordination.svelte';
 	import type { DiffFile } from '$lib/utils/diff';
 
@@ -64,6 +68,24 @@
 	const coord = $derived(coordinationOf(root));
 	let selectedId = $state<string | null>(null);
 	let showDone = $state(false);
+	const HOW_KEY = 'coordination.howItWorks.hidden';
+	let showHow = $state(readHowPref());
+	function readHowPref(): boolean {
+		try {
+			return localStorage.getItem(HOW_KEY) !== '1';
+		} catch {
+			return true;
+		}
+	}
+	function setShowHow(value: boolean) {
+		showHow = value;
+		try {
+			if (value) localStorage.removeItem(HOW_KEY);
+			else localStorage.setItem(HOW_KEY, '1');
+		} catch {
+			// storage unavailable: keep the choice for this session only
+		}
+	}
 	let busy = $state<string | null>(null);
 	let showNewTask = $state(false);
 	let diffFor = $state<string | null>(null);
@@ -90,7 +112,7 @@
 		{ key: 'attention', statuses: ['blocked', 'failed'] },
 		{ key: 'waiting', statuses: ['queued', 'paused'] },
 		{ key: 'review', statuses: ['reviewing', 'integration_ready'] },
-		{ key: 'done', statuses: ['completed'] }
+		{ key: 'done', statuses: ['completed', 'ended'] }
 	];
 
 	const grouped = $derived(
@@ -119,7 +141,8 @@
 		integration_ready:
 			'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
 		completed: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400',
-		failed: 'bg-red-100 text-red-800 dark:bg-red-500/25 dark:text-red-200'
+		failed: 'bg-red-100 text-red-800 dark:bg-red-500/25 dark:text-red-200',
+		ended: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400'
 	};
 	const LEVEL_CLASS: Record<string, string> = {
 		info: 'text-gray-500 dark:text-gray-400',
@@ -244,6 +267,40 @@
 		if (ok) await run(`rm:${task.id}`, () => removeCoordWorktree(task.id));
 	}
 
+	async function endTask(task: CoordTask) {
+		const ok = await requestConfirm({
+			title: $t('coordination.endTitle'),
+			message: $t('coordination.endMessage'),
+			confirmLabel: $t('coordination.end')
+		});
+		if (ok) await run(`end:${task.id}`, () => endCoordTask(task.id), $t('coordination.ended'));
+	}
+
+	async function deleteTask(task: CoordTask) {
+		const ok = await requestConfirm({
+			title: $t('coordination.deleteTitle'),
+			message: $t('coordination.deleteMessage', { branch: task.branch ?? '' }),
+			confirmLabel: $t('coordination.delete')
+		});
+		if (!ok) return;
+		const removeFolder = task.worktree_path
+			? await requestConfirm({
+					title: $t('coordination.deleteFolderTitle'),
+					message: $t('coordination.deleteFolderMessage', { path: task.worktree_path }),
+					confirmLabel: $t('coordination.deleteFolder'),
+					cancelLabel: $t('coordination.keepFolder')
+				})
+			: false;
+		await run(
+			`delete:${task.id}`,
+			async () => {
+				await deleteCoordTask(task.id, removeFolder);
+				if (selectedId === task.id) selectedId = null;
+			},
+			$t('coordination.deleted')
+		);
+	}
+
 	async function integrate() {
 		const ok = await requestConfirm({
 			title: $t('coordination.integrateTitle'),
@@ -360,6 +417,82 @@
 		</div>
 	</div>
 
+	{#if !coord.notRepo}
+		{#if showHow || (coord.loaded && !coord.tasks.length)}
+			<div
+				class="how border-b border-gray-100 bg-gray-50/60 px-3 py-2.5 dark:border-white/6 dark:bg-white/[0.02]"
+			>
+				<div class="mb-1.5 flex items-center gap-2">
+					<Icon name="info" size={13} class="text-gray-500" />
+					<span class="text-xs font-medium text-gray-700 dark:text-gray-200"
+						>{$t('coordination.how.title')}</span
+					>
+					{#if coord.tasks.length}
+						<button class="link ml-auto text-[0.6875rem]" onclick={() => setShowHow(false)}
+							>{$t('coordination.how.hide')}</button
+						>
+					{/if}
+				</div>
+				<ol class="grid gap-2 text-[0.75rem] text-gray-600 sm:grid-cols-3 dark:text-gray-300">
+					<li class="how-step">
+						<span class="how-num">1</span>
+						<span
+							><b>{$t('coordination.how.step1Title')}</b>
+							{$t('coordination.how.step1')}</span
+						>
+					</li>
+					<li class="how-step">
+						<span class="how-num">2</span>
+						<span
+							><b>{$t('coordination.how.step2Title')}</b>
+							{$t('coordination.how.step2')}</span
+						>
+					</li>
+					<li class="how-step">
+						<span class="how-num">3</span>
+						<span
+							><b>{$t('coordination.how.step3Title')}</b>
+							{$t('coordination.how.step3')}</span
+						>
+					</li>
+				</ol>
+			</div>
+		{/if}
+		{#if coord.usageTotals && coord.tasks.length}
+			<div
+				class="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-gray-100 px-3 py-1.5 text-[0.6875rem] text-gray-500 dark:border-white/6 dark:text-gray-400"
+			>
+				<span class="font-medium uppercase tracking-wide text-gray-400"
+					>{$t('coordination.usage.allTasks')}</span
+				>
+				<span use:tooltip={$t('coordination.usage.tokensHint')}
+					><b class="stat">{compactNumber(coord.usageTotals.tokens)}</b>
+					{$t('coordination.usage.tokens')}</span
+				>
+				<span use:tooltip={$t('coordination.usage.timeHint')}
+					><b class="stat">{compactDuration(coord.usageTotals.duration_ms)}</b>
+					{$t('coordination.usage.working')}</span
+				>
+				<span
+					><b class="stat">{compactNumber(coord.usageTotals.tool_calls)}</b>
+					{$t('coordination.usage.toolCalls')}</span
+				>
+				<span
+					><b class="stat">{compactNumber(coord.usageTotals.files)}</b>
+					{$t('coordination.usage.files')}</span
+				>
+				{#if coord.usageTotals.cost_usd > 0}
+					<span><b class="stat">${coord.usageTotals.cost_usd.toFixed(2)}</b></span>
+				{/if}
+				{#if !showHow}
+					<button class="link ml-auto" onclick={() => setShowHow(true)}
+						>{$t('coordination.how.show')}</button
+					>
+				{/if}
+			</div>
+		{/if}
+	{/if}
+
 	{#if coord.notRepo}
 		<div class="empty">{$t('coordination.notRepo')}</div>
 	{:else if coord.error}
@@ -421,6 +554,13 @@
 									{#if task.branch}<span class="truncate font-mono">{task.branch}</span>{/if}
 									{#if task.pr_number}
 										<span class="shrink-0">#{task.pr_number}</span>
+									{/if}
+									{#if coord.usage[task.id]?.tokens}
+										<span
+											class="ml-auto shrink-0 tabular-nums text-gray-400"
+											use:tooltip={$t('coordination.usage.tokensHint')}
+											>{compactNumber(coord.usage[task.id].tokens)}</span
+										>
 									{/if}
 								</div>
 							</button>
@@ -543,6 +683,16 @@
 									<Icon name="stop" size={13} />{$t('coordination.pause')}
 								</button>
 							{/if}
+							{#if !['completed', 'ended'].includes(task.status)}
+								<button
+									class="btn-secondary"
+									disabled={busy === `end:${task.id}`}
+									onclick={() => endTask(task)}
+									use:tooltip={$t('coordination.endHint')}
+								>
+									<Icon name="xmark" size={13} />{$t('coordination.end')}
+								</button>
+							{/if}
 							{#if task.status === 'paused' || task.status === 'failed'}
 								<button
 									class="btn-secondary"
@@ -643,8 +793,13 @@
 							<dt>{$t('coordination.base')}</dt>
 							<dd class="font-mono">{task.meta.base_branch ?? task.base_ref ?? '—'}</dd>
 							<dt>{$t('coordination.worktree')}</dt>
-							<dd class="break-all font-mono">
-								{task.worktree_path ?? $t('coordination.readOnly')}
+							<dd class="break-all">
+								<span class="font-mono">{task.worktree_path ?? $t('coordination.readOnly')}</span>
+								{#if task.worktree_path}
+									<span class="mt-0.5 block text-[0.6875rem] text-gray-400"
+										>{$t('coordination.worktreeHint')}</span
+									>
+								{/if}
 							</dd>
 							<dt>{$t('coordination.agent')}</dt>
 							<dd>
@@ -669,6 +824,35 @@
 							<dt>{$t('coordination.updated')}</dt>
 							<dd>{relTime(task.updated_at)}</dd>
 						</dl>
+
+						{#if coord.usage[task.id]}
+							{@const u = coord.usage[task.id]}
+							<section>
+								<h3 class="section-title">{$t('coordination.usage.title')}</h3>
+								<div class="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+									<div class="tile" use:tooltip={$t('coordination.usage.tokensHint')}>
+										<span class="tile-value">{compactNumber(u.tokens)}</span>
+										<span class="tile-label">{$t('coordination.usage.tokens')}</span>
+									</div>
+									<div class="tile" use:tooltip={$t('coordination.usage.timeHint')}>
+										<span class="tile-value">{compactDuration(u.duration_ms)}</span>
+										<span class="tile-label">{$t('coordination.usage.working')}</span>
+									</div>
+									<div class="tile">
+										<span class="tile-value">{compactNumber(u.tool_calls)}</span>
+										<span class="tile-label">{$t('coordination.usage.toolCalls')}</span>
+									</div>
+									<div class="tile">
+										<span class="tile-value">{compactNumber(u.files)}</span>
+										<span class="tile-label">{$t('coordination.usage.files')}</span>
+									</div>
+								</div>
+								<p class="mt-1 text-[0.6875rem] text-gray-400">
+									{$t('coordination.usage.turns', { count: u.turns })}{#if u.cost_usd > 0}
+										· ${u.cost_usd.toFixed(2)}{/if}
+								</p>
+							</section>
+						{/if}
 
 						{#if task.blockers.length}
 							<section>
@@ -711,7 +895,7 @@
 									>
 								</button>
 							{/each}
-							{#if coord.tasks.filter((o) => o.id !== task.id && !['completed', 'failed'].includes(o.status) && !dependsOn(task.id).some((d) => d.id === o.id)).length}
+							{#if coord.tasks.filter((o) => o.id !== task.id && !['completed', 'failed', 'ended'].includes(o.status) && !dependsOn(task.id).some((d) => d.id === o.id)).length}
 								<select
 									class="field mt-1 text-xs"
 									value=""
@@ -722,7 +906,7 @@
 									}}
 								>
 									<option value="">{$t('coordination.addDependency')}</option>
-									{#each coord.tasks.filter((o) => o.id !== task.id && !['completed', 'failed'].includes(o.status) && !dependsOn(task.id).some((d) => d.id === o.id)) as other}
+									{#each coord.tasks.filter((o) => o.id !== task.id && !['completed', 'failed', 'ended'].includes(o.status) && !dependsOn(task.id).some((d) => d.id === o.id)) as other}
 										<option value={other.id}>{other.title}</option>
 									{/each}
 								</select>
@@ -897,7 +1081,7 @@
 							</form>
 						</section>
 
-						{#if task.worktree_path && ['completed', 'failed', 'paused', 'blocked'].includes(task.status)}
+						{#if task.worktree_path && ['completed', 'failed', 'ended', 'paused', 'blocked'].includes(task.status)}
 							<section class="border-t border-gray-100 pt-3 dark:border-white/6">
 								<button
 									class="link text-xs text-red-600 dark:text-red-400"
@@ -907,6 +1091,20 @@
 								</button>
 								<span class="ml-1 text-[0.6875rem] text-gray-400"
 									>{$t('coordination.removeWorktreeHint')}</span
+								>
+							</section>
+						{/if}
+						{#if ['completed', 'failed', 'ended'].includes(task.status)}
+							<section class="border-t border-gray-100 pt-3 dark:border-white/6">
+								<button
+									class="link text-xs text-red-600 dark:text-red-400"
+									disabled={busy === `delete:${task.id}`}
+									onclick={() => deleteTask(task)}
+								>
+									{$t('coordination.deleteTask')}
+								</button>
+								<span class="ml-1 text-[0.6875rem] text-gray-400"
+									>{$t('coordination.deleteHint')}</span
 								>
 							</section>
 						{/if}
@@ -955,11 +1153,11 @@
 				<span class="label">{$t('coordination.testCommand')}</span>
 				<input class="field font-mono" bind:value={form.testCommand} placeholder="npm test" />
 			</label>
-			{#if coord.tasks.some((task) => !['completed', 'failed'].includes(task.status))}
+			{#if coord.tasks.some((task) => !['completed', 'failed', 'ended'].includes(task.status))}
 				<fieldset>
 					<legend class="label">{$t('coordination.dependsOnLabel')}</legend>
 					<div class="max-h-32 space-y-1 overflow-y-auto">
-						{#each coord.tasks.filter((task) => !['completed', 'failed'].includes(task.status)) as other}
+						{#each coord.tasks.filter((task) => !['completed', 'failed', 'ended'].includes(task.status)) as other}
 							<label class="flex items-center gap-2 text-xs">
 								<input type="checkbox" value={other.id} bind:group={form.dependsOn} />
 								<span class="truncate">{other.title}</span>
@@ -986,6 +1184,57 @@
 {/if}
 
 <style>
+	.how-step {
+		display: flex;
+		gap: 0.5rem;
+		align-items: flex-start;
+		line-height: 1.35;
+	}
+	.how-num {
+		display: inline-flex;
+		flex-shrink: 0;
+		align-items: center;
+		justify-content: center;
+		width: 1.125rem;
+		height: 1.125rem;
+		border-radius: 9999px;
+		font-size: 0.625rem;
+		font-weight: 600;
+		background: rgb(229 231 235);
+		color: rgb(55 65 81);
+	}
+	:global(.dark) .how-num {
+		background: rgb(255 255 255 / 0.1);
+		color: rgb(229 231 235);
+	}
+	.stat {
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+		color: rgb(55 65 81);
+	}
+	:global(.dark) .stat {
+		color: rgb(229 231 235);
+	}
+	.tile {
+		display: flex;
+		flex-direction: column;
+		gap: 0.125rem;
+		padding: 0.5rem 0.625rem;
+		border-radius: 0.5rem;
+		background: rgb(249 250 251);
+	}
+	:global(.dark) .tile {
+		background: rgb(255 255 255 / 0.04);
+	}
+	.tile-value {
+		font-size: 0.9375rem;
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+	}
+	.tile-label {
+		font-size: 0.6875rem;
+		color: rgb(107 114 128);
+	}
 	.empty {
 		display: flex;
 		flex: 1;

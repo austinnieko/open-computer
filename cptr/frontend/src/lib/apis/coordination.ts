@@ -11,7 +11,8 @@ export type TaskStatus =
 	| 'reviewing'
 	| 'integration_ready'
 	| 'completed'
-	| 'failed';
+	| 'failed'
+	| 'ended';
 
 export type ConflictLevel = 'info' | 'potential' | 'confirmed' | 'blocking';
 
@@ -152,6 +153,20 @@ export const getCoordMessages = (root: string, taskId?: string) =>
 export const getCoordIntegrations = (root: string) =>
 	fetchJSON<{ integrations: CoordIntegration[] }>(`/api/coordination/integrations?${q(root)}`);
 
+export interface TaskUsage {
+	tokens: number;
+	cost_usd: number;
+	duration_ms: number;
+	tool_calls: number;
+	turns: number;
+	files: number;
+}
+
+export const getCoordUsage = (root: string) =>
+	fetchJSON<{ tasks: Record<string, TaskUsage>; totals: TaskUsage }>(
+		`/api/coordination/usage?${q(root)}`
+	);
+
 export interface RegisterTaskBody {
 	root: string;
 	title: string;
@@ -187,6 +202,12 @@ export const publishCoordPr = (id: string, draft = false) =>
 		confirm: true,
 		draft
 	});
+export const endCoordTask = (id: string) => taskPost(id, 'end');
+export const deleteCoordTask = (id: string, removeWorktree: boolean) =>
+	fetchJSON<{ ok: boolean; branch_kept: string | null; worktree_removed: boolean }>(
+		`/api/coordination/tasks/${encodeURIComponent(id)}`,
+		{ ...jsonBody({ confirm: true, remove_worktree: removeWorktree }), method: 'DELETE' }
+	);
 export const removeCoordWorktree = (id: string) =>
 	taskPost(id, 'worktree/remove', { confirm: true });
 export const sendCoordMessage = (id: string, body: string) =>

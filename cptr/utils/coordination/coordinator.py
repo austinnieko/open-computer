@@ -56,7 +56,7 @@ def _summary(row: CoordConflict, titles: dict[str, str], other_id: str | None) -
         "dependency_version": "the tasks require different versions of a dependency",
         "merge_conflict": "the branches do not merge cleanly",
         "base_divergence": "the branch no longer merges cleanly into its base",
-        "dependency_failed": "a task this one depends on has failed",
+        "dependency_failed": "a task this one depends on has failed or was ended",
     }.get(row.kind, row.kind.replace("_", " "))
     text = f"{row.level.upper()} conflict with {other}: {detail}"
     if files:
@@ -250,6 +250,22 @@ async def wait_idle() -> None:
 # ── Agent turn hooks (called from chat_task) ────────────────
 
 
+def task_brief(task: CoordTask) -> str:
+    """The task's title, description and workspace, given to its agent on the first turn."""
+    lines = ["", "", "[Coordinator] This chat is for the task below. Work only on this task.", ""]
+    lines.append(f"Task: {task.title}")
+    if task.description and task.description.strip():
+        lines += ["Description:", task.description.strip()]
+    if task.worktree_path:
+        lines.append(
+            f"Work in this worktree: {task.worktree_path} (branch {task.branch}). "
+            "Commit your changes on that branch; do not switch branches or edit the main checkout."
+        )
+    else:
+        lines.append("This is a read-only task: investigate and report, do not edit files.")
+    return "\n".join(lines)
+
+
 async def on_turn_start(chat_id: str, chat_meta: dict | None) -> str:
     """Mark the task running and return the coordinator block to append to the prompt."""
     task_id = (chat_meta or {}).get("coord_task_id")
@@ -282,7 +298,13 @@ async def on_turn_start(chat_id: str, chat_meta: dict | None) -> str:
             {task.user_id},
             {"type": "coord:task", "task": (await CoordTask.get_by_id(task.id)).to_dict()},
         )
-    block = await messages.take_delivery(task.id)
+    block = ""
+    if not (task.meta or {}).get("briefed_at"):
+        # First turn in this task's chat: tell the agent what the task is, so
+        # "start working on this" has something to refer to.
+        block = task_brief(task)
+        await CoordTask.update_fields(task.id, meta={**(task.meta or {}), "briefed_at": now_ms()})
+    block += await messages.take_delivery(task.id)
     if task.status == "blocked":
         reasons = "; ".join(b.get("detail", b.get("kind", "")) for b in task.blockers or [])
         block += (

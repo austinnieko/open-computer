@@ -29,7 +29,8 @@
 		integration_ready:
 			'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
 		completed: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400',
-		failed: 'bg-red-100 text-red-800 dark:bg-red-500/25 dark:text-red-200'
+		failed: 'bg-red-100 text-red-800 dark:bg-red-500/25 dark:text-red-200',
+		ended: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400'
 	};
 
 	async function load(id: string) {
@@ -45,6 +46,10 @@
 		const id = taskId;
 		void load(id);
 		return socketStore.on('events:chat', (data: any) => {
+			if (data?.type === 'coord:task_deleted' && data.task_id === id) {
+				task = null;
+				return;
+			}
 			if (data?.type !== 'coord:task') return;
 			if (data.task?.id === id) task = data.task;
 			else if (data.task === null) void load(id);

@@ -40,9 +40,10 @@ TASK_STATUSES = (
     "integration_ready",
     "completed",
     "failed",
+    "ended",
 )
 CONFLICT_LEVELS = ("info", "potential", "confirmed", "blocking")
-TERMINAL_STATUSES = frozenset({"completed", "failed"})
+TERMINAL_STATUSES = frozenset({"completed", "failed", "ended"})
 ACTIVE_STATUSES = frozenset(set(TASK_STATUSES) - TERMINAL_STATUSES)
 
 
@@ -233,6 +234,33 @@ class CoordTask(Base):
             result = await db.execute(stmt.values(**fields))
             await db.commit()
             return result.rowcount > 0
+
+    @staticmethod
+    async def delete_with_records(task_id: str) -> None:
+        """Delete a task and everything that refers to it, in one transaction.
+
+        Removes its dependency edges (both directions), claims, conflicts and
+        messages. Integration runs keep their history.
+        """
+        async with await get_db() as db:
+            await db.execute(
+                delete(CoordTaskDep).where(
+                    (CoordTaskDep.task_id == task_id) | (CoordTaskDep.depends_on_id == task_id)
+                )
+            )
+            await db.execute(delete(CoordClaim).where(CoordClaim.task_id == task_id))
+            await db.execute(
+                delete(CoordConflict).where(
+                    (CoordConflict.task_a == task_id) | (CoordConflict.task_b == task_id)
+                )
+            )
+            await db.execute(
+                delete(CoordMessage).where(
+                    (CoordMessage.from_task == task_id) | (CoordMessage.to_task == task_id)
+                )
+            )
+            await db.execute(delete(CoordTask).where(CoordTask.id == task_id))
+            await db.commit()
 
 
 async def _first_claimed(repo_key: str, resources: list[str]) -> tuple[str, str] | None:
