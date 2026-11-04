@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 📊 **Stats beside every chat.** The empty space to the right of a conversation now shows that chat's numbers: total tokens (including sub-agents) with the input/output split and cost when the model reports it, how full the context is before it compacts, time spent working, replies, tool calls, a per-reply activity chart, the most-used tools, files touched (click to open), sub-agents and the models used. It updates live while the chat runs. Turn it on or off with the chart button in the chat's title bar. On narrower panes it opens over the chat when you click that button.
+- 🪙 **OpenCode token counts and cost.** Chats run through OpenCode 2.x now record the tokens and cost OpenCode reports for each step, so they show up in chat stats and the Usage page.
 - 🗂️ **Open several chats at once again, listed in the sidebar.** 0.9.28 limited each pane to one chat, so opening a chat closed the one you had. Chats now stay open until you close them, as they did when they were tabs. Instead of tabs across the top, your open chats are listed first under the workspace in the sidebar. The one you're viewing is highlighted, and each has an × to close it. Your other recent chats follow below a divider. Clicking an open chat switches to it, including from a file. Starting a new chat adds it to the open list.
 
 ### Fixed

@@ -692,12 +692,13 @@ async def _run_v2(
             await stream_task
 
     yield AgentDone(
+        usage=dict(translator.usage) or None,
         resume_state={
             "profile_id": profile["id"],
             "session_id": session_id,
             "workspace": workspace,
             "model": model,
-        }
+        },
     )
 
 
