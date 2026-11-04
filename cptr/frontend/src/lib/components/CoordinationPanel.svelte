@@ -37,6 +37,7 @@
 		type TaskStatus
 	} from '$lib/apis/coordination';
 	import {
+		coordinationFocus,
 		coordinationOf,
 		levelRank,
 		refresh,
@@ -70,6 +71,15 @@
 	let diffLoading = $state(false);
 	let readiness = $state<{ ready: boolean; reasons: string[] } | null>(null);
 	let note = $state('');
+
+	// A task chip in a chat asked us to show this task.
+	$effect(() =>
+		coordinationFocus.subscribe((id) => {
+			if (!id) return;
+			select(id);
+			coordinationFocus.set(null);
+		})
+	);
 
 	const byId = $derived(new Map(coord.tasks.map((task) => [task.id, task])));
 	const selected = $derived(selectedId ? (byId.get(selectedId) ?? null) : null);

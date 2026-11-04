@@ -1420,5 +1420,7 @@
 	"coordination.validationStatus.no_tests": "No test command configured",
 	"coordination.viewDiff": "View diff",
 	"coordination.with": "with",
-	"coordination.worktree": "Worktree"
+	"coordination.worktree": "Worktree",
+	"coordination.chipLabel": "Task worktree",
+	"coordination.chipTooltip": "This chat is the agent for task “{{title}}”. It runs inside the task's own worktree, not the workspace checkout. Click to open it in Agents & tasks."
 }

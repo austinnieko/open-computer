@@ -8,6 +8,7 @@
  */
 
 import { untrack } from 'svelte';
+import { writable } from 'svelte/store';
 import {
 	getCoordConflicts,
 	getCoordIntegrations,
@@ -42,6 +43,9 @@ interface Entry {
 }
 
 const entries = $state<Record<string, Entry>>({});
+
+/** Task the Agents & tasks dashboard should select next (set by e.g. a chat's task chip). */
+export const coordinationFocus = writable<string | null>(null);
 let listening = false;
 
 function empty(): CoordState {

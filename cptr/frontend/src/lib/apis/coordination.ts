@@ -194,6 +194,12 @@ export const sendCoordMessage = (id: string, body: string) =>
 export const addCoordDependency = (id: string, dependsOn: string) =>
 	taskPost(id, 'dependencies', { depends_on: dependsOn });
 
+export const getCoordTask = (id: string) =>
+	fetchJSON<{
+		task: CoordTask;
+		worktree: { exists: boolean; dirty?: boolean; branch?: string } | null;
+	}>(`/api/coordination/tasks/${encodeURIComponent(id)}`);
+
 export const getCoordTaskReadiness = (id: string) =>
 	fetchJSON<{ ready: boolean; reasons: string[] }>(
 		`/api/coordination/tasks/${encodeURIComponent(id)}/readiness`
