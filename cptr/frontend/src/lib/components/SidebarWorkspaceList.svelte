@@ -24,6 +24,7 @@
 	import Sortable from 'sortablejs';
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import ChatItem from './common/ChatItem.svelte';
+	import { requestConfirm } from '$lib/stores/confirm';
 	import { describeActivity, subagentsOf, trackSubagents } from '$lib/stores/subagents.svelte';
 	import {
 		coordinationOf,
@@ -338,6 +339,18 @@
 		if (!chatMenu) return;
 		const { chatId, wsPath } = chatMenu;
 		closeChatMenu();
+		// A task's agent chat takes its task with it, so say so first.
+		const listed = (wsChatsCache.get(wsPath) ?? []).find((c) => c.id === chatId);
+		const isTaskChat =
+			taskByChat.has(chatId) || !!(listed?.meta as Record<string, unknown> | null)?.coord_task_id;
+		if (isTaskChat) {
+			const ok = await requestConfirm({
+				title: $t('sidebar.deleteTaskChatTitle'),
+				message: $t('sidebar.deleteTaskChatMessage'),
+				confirmLabel: $t('sidebar.deleteTaskChatConfirm')
+			});
+			if (!ok) return;
+		}
 		try {
 			await apiDeleteChat(chatId);
 		} catch (err) {

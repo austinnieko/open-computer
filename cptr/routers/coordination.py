@@ -147,15 +147,24 @@ async def list_tasks(request: Request, root: str):
     tasks = await CoordTask.query(user_id=user_id, repo_key=repo.key)
     deps = await CoordTaskDep.all_for_repo(repo.key)
     active = get_active_chat_ids()
+    chat_ids = [t.chat_id for t in tasks if t.chat_id]
+    existing = {c.id for c in await Chat.get_by_ids(chat_ids)} if chat_ids else set()
     # Backfill task chats created before they got a chat file.
-    for t in tasks:
-        if t.chat_id:
-            await _ensure_chat_file(request, repo.main_root, t.chat_id)
+    for chat_id in chat_ids:
+        if chat_id in existing:
+            await _ensure_chat_file(request, repo.main_root, chat_id)
+
+    def _row(t: CoordTask) -> dict:
+        row = t.to_dict()
+        # The chat was deleted (before deleting a chat removed its task too).
+        row["chat_missing"] = bool(t.chat_id) and t.chat_id not in existing
+        return row
+
     return {
         "repo_root": repo.main_root,
         "repo_key": repo.key,
         "active_chats": sorted(t.chat_id for t in tasks if t.chat_id and t.chat_id in active),
-        "tasks": [t.to_dict() for t in tasks],
+        "tasks": [_row(t) for t in tasks],
         "dependencies": [{"task_id": a, "depends_on": b} for a, b in deps],
     }
 
@@ -205,6 +214,22 @@ async def _stop_turns(task: CoordTask) -> int:
     return stopped
 
 
+async def forget_task_of_deleted_chat(chat_id: str, user_id: str) -> str | None:
+    """Remove the task whose agent chat is being deleted. Returns its id.
+
+    Called by chat deletion: the user deleted the task's chat, so the task goes
+    too. Its branch, commits and worktree folder are always kept.
+    """
+    task = await CoordTask.get_by_chat(chat_id)
+    if not task or task.user_id != user_id:
+        return None
+    await _stop_turns(task)
+    await CoordTask.delete_with_records(task.id)
+    await emit_to_user(user_id, {"type": "coord:task_deleted", "task_id": task.id})
+    coordinator.request_refresh(task.repo_key)
+    return task.id
+
+
 @router.post("/tasks/{task_id}/pause")
 async def pause_task(request: Request, task_id: str):
     """Stop the task's running agent turn (if any) and mark it paused."""
@@ -251,7 +276,10 @@ async def delete_task(request: Request, task_id: str, body: DeleteTaskRequest):
     task = await _own_task(request, task_id)
     if not body.confirm:
         raise HTTPException(409, "Deleting a task requires explicit user approval")
-    if task.status not in {"ended", "completed", "failed"}:
+    chat = await Chat.get_by_id(task.chat_id) if task.chat_id else None
+    chat_missing = bool(task.chat_id) and chat is None
+    # With its chat gone no agent can run it, so it can be deleted as it is.
+    if task.status not in {"ended", "completed", "failed"} and not chat_missing:
         raise HTTPException(409, f"task is {task.status}; end it first")
     removed_worktree = False
     if body.remove_worktree and task.worktree_path:
@@ -266,9 +294,8 @@ async def delete_task(request: Request, task_id: str, body: DeleteTaskRequest):
         except wt.WorktreeError as exc:
             raise HTTPException(409, str(exc)) from exc
         removed_worktree = True
-    if task.chat_id:
-        chat = await Chat.get_by_id(task.chat_id)
-        if chat and (chat.meta or {}).get("coord_task_id") == task.id:
+    if chat:
+        if (chat.meta or {}).get("coord_task_id") == task.id:
             meta = dict(chat.meta or {})
             meta.pop("coord_task_id", None)
             if removed_worktree or meta.get("cwd") == task.worktree_path:

@@ -62,6 +62,8 @@ export interface CoordTask {
 		integration?: { run_id: string; passed: boolean; head: string };
 	} | null;
 	blockers: TaskBlocker[];
+	/** Its chat was deleted (list endpoint only). */
+	chat_missing?: boolean;
 	meta: {
 		base_branch?: string;
 		milestones?: Record<string, { at: number; [k: string]: unknown }>;
