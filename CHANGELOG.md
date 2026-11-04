@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.29] - 2026-11-04
+
+### Changed
+
+- 🗂️ **The top bar shows only files and tools.** Chats no longer appear as tabs at the top, even when a chat shares a pane with files. Switch chats, and get back to a chat from a file, using the sidebar.
+
+### Fixed
+
+- 🏷️ **Chats get proper names again.** Chats run through a coding agent such as OpenCode or Claude Code were never renamed: naming failed silently and they kept the first 50 characters of your message. They are now named like any other chat. The name comes from your title model setting, your default model, or the first available model. Naming also works with thinking models such as Qwen and GLM, which used to run out of room before answering. If no model can name a chat, it gets a tidied first line instead (for example "I had an agent working on…" rather than "## I had an agent…").
+
 ## [0.9.28] - 2026-11-04
 
 ### Changed

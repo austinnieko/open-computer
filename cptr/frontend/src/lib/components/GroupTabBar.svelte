@@ -93,13 +93,8 @@
 
 	type TabDragPayload = { tabId: string; groupId: string };
 
-	// Chats live in the sidebar. A pane's chat only gets a tab here when it
-	// shares the pane with files, terminals or the browser, so you can switch.
-	const displayTabs = $derived.by(() => {
-		const tabs = group?.tabs ?? [];
-		const others = tabs.filter((t) => t.type !== 'chat' && t.type !== 'home');
-		return others.length ? tabs : tabs.filter((t) => t.type !== 'chat');
-	});
+	// The top bar is for files and tools only; chats live in the sidebar.
+	const displayTabs = $derived((group?.tabs ?? []).filter((t) => t.type !== 'chat'));
 
 	const isActiveGroup = $derived(home ? homeActive : $activeWorkspace?.activeGroupId === group?.id);
 

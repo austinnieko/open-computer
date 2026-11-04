@@ -44,6 +44,7 @@ from cptr.socket.main import emit_to_user
 from cptr.utils.ai import (
     ChatCompletionForm,
     generate_json,
+    generate_text,
     stream_anthropic,
     stream_openai_completions,
     stream_openai_responses,
@@ -876,17 +877,21 @@ async def generate_chat_title(
     try:
         from cptr.utils.utility_models import configured_utility_model
 
-        parsed = await generate_json(
+        # Agent chats have no API connection; generate_text then falls back to
+        # the title model setting, the default model, or the first API model.
+        text = await generate_text(
             None,
             model_id=await configured_utility_model("title_generation"),
             active_connection=connection,
             active_model=model,
             messages=[{"role": "user", "content": truncated}],
             system=TITLE_PROMPT,
-            max_tokens=50,
+            # Room for thinking models (Qwen, GLM, ...) to reason before answering.
+            max_tokens=400,
         )
-        title = (parsed.get("title", "") if isinstance(parsed, dict) else "").strip()
+        title = title_from_response(text) or heuristic_title(user_message)
         if not title:
+            logger.info("[title] No title produced for chat %s", chat_id[:8])
             return
 
         # Do not overwrite a title manually set while this request was running.
@@ -901,7 +906,45 @@ async def generate_chat_title(
         logger.info("[title] Generated title for chat %s: %s", chat_id[:8], title)
 
     except Exception:
-        logger.debug("[title] Failed to generate title for chat %s", chat_id[:8], exc_info=True)
+        logger.info("[title] Failed to generate title for chat %s", chat_id[:8], exc_info=True)
+
+
+_THINK_BLOCK = re.compile(r"<(think|thinking|reasoning)>.*?</\1>", re.S | re.I)
+
+
+def title_from_response(text: str | None) -> str:
+    """Pull a title out of a model reply: JSON first, then a plain short line."""
+    if not text:
+        return ""
+    from cptr.utils.json_parser import extract_json
+
+    cleaned = _THINK_BLOCK.sub("", text)
+    # An unclosed think block means the model ran out of room mid-thought.
+    cleaned = re.split(r"<(?:think|thinking|reasoning)>", cleaned, flags=re.I)[0].strip()
+    parsed = extract_json(cleaned)
+    if isinstance(parsed, dict) and isinstance(parsed.get("title"), str):
+        return _tidy_title(parsed["title"])
+    for line in cleaned.splitlines():
+        line = line.strip()
+        if line and "{" not in line and len(line) <= 80:
+            return _tidy_title(re.sub(r"^(title\s*:\s*)", "", line, flags=re.I))
+    return ""
+
+
+def heuristic_title(message: str) -> str:
+    """Readable title from the first line of a message when no model can name it."""
+    for line in (message or "").splitlines():
+        line = re.sub(r"^[\s#>*\-`]+", "", line).strip()
+        if line:
+            return _tidy_title(line, limit=60)
+    return ""
+
+
+def _tidy_title(title: str, limit: int = 80) -> str:
+    title = re.sub(r"\s+", " ", title).strip().strip("\"'`*").strip()
+    if len(title) > limit:
+        title = title[:limit].rsplit(" ", 1)[0].rstrip(" ,.;:-") + "…"
+    return title
 
 
 # ── Message history ─────────────────────────────────────────
@@ -1915,6 +1958,11 @@ async def run_chat_task(
         )
         return
 
+    # Set before the try: the finally block below uses these for title
+    # generation, and agent targets (OpenCode, Claude Code, ...) never assign
+    # them, which used to raise and silently skip naming the chat.
+    connection: dict | None = None
+    model = ""
     try:
         if isinstance(target, AgentModelTarget):
             await _run_agent_target(target)
