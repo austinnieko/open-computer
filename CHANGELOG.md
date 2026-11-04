@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 🎚️ **Set how many task agents run at once.** **Settings → Agents → Task agents running at once** (admins). The default is now 4 instead of 2. Raising it starts waiting tasks right away.
 - 🌿 **Choose where a new task starts.** New task has a **Start from** branch, defaulting to the branch of the folder you are in, so a task opened from a worktree starts from that worktree's branch instead of the main checkout's.
 - 🅰️ **Tell agents from chats in the sidebar.** Each chat row has a small badge: **A** for a task's agent chat, coloured by the task's status (green running, blue waiting for you, amber paused or blocked, purple in review, red failed, grey done), and **C** for a normal chat, green while it is working. Hover the badge for the status.
 - 🧭 **Agents & tasks from the sidebar.** A workspace's ⋯ menu now opens its Agents & tasks dashboard, even from Home.
@@ -20,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 💤 **Idle agents no longer look busy or hold a slot.** When a task agent finishes its turn and nothing else is running for it (no sub-agents, no timers), the task shows **Waiting for you** instead of Running and frees its slot, so the next queued task starts. Your next message in its chat continues it.
+- ⏳ **Queued tasks say what they are waiting for.** A task with instructions shows **Waiting for a free slot**, with how many of the slots are in use.
+- 🧾 **View diff no longer freezes on large changes.** It lists the changed files with their line counts and shows a file's lines when you open it; small diffs still open fully.
 - 🧭 **Agents & tasks says which repository it shows.** The header names the repository, and a folder that is part of another repository (a worktree of it, or a folder inside it) explains that it shares that repository's task list.
 - 📌 **The sidebar no longer reshuffles when you open a chat.** Chats keep one order (most recent first) and an open chat is marked in place; its close button replaces its time, so long titles are no longer cut short.
 - 🧹 **Deleting a task's chat removes the task too.** Deleting an agent chat from the sidebar now asks first, then removes its task from Agents & tasks; the branch, commits and folder are kept. Tasks whose chat was deleted earlier show **Chat deleted**, with a **Delete task** button at the top of the task, and can be deleted without ending them first.

@@ -14,6 +14,7 @@
 	import { t } from '$lib/i18n';
 	import { refreshChatState } from '$lib/stores/chat';
 	import AgentProfileModal from './AgentProfileModal.svelte';
+	import { getCoordLimits, setCoordLimits } from '$lib/apis/coordination';
 
 	type ModalState =
 		| { mode: 'create'; profile: AgentProfile }
@@ -28,6 +29,22 @@
 	let saved = $state<Record<string, boolean>>({});
 	let modal = $state<ModalState | null>(null);
 	let deletedProfile = $state(false);
+
+	// Task agents (Agents & tasks): how many may write code at once per repository.
+	let maxWriters = $state<number | null>(null);
+	let savingLimit = $state(false);
+	async function saveMaxWriters() {
+		const value = Math.min(16, Math.max(1, Math.round(Number(maxWriters) || 1)));
+		savingLimit = true;
+		try {
+			maxWriters = (await setCoordLimits(value)).max_writers;
+			toast.success($t('settings.saved'));
+		} catch {
+			toast.error($t('admin.failedToSave'));
+		} finally {
+			savingLimit = false;
+		}
+	}
 
 	const statusLabelKey: Record<string, string> = {
 		ready: 'admin.agentsStatusReady',
@@ -225,6 +242,9 @@
 	}
 
 	onMount(async () => {
+		getCoordLimits()
+			.then((limits) => (maxWriters = limits.max_writers))
+			.catch(() => {});
 		try {
 			applyResponse(await getAgents());
 		} catch {
@@ -266,6 +286,31 @@
 			<Spinner size={16} />
 		</div>
 	{:else}
+		{#if maxWriters !== null}
+			<div class="mb-4 rounded-lg border border-gray-100 p-3 dark:border-white/6">
+				<div class="flex items-center justify-between gap-3">
+					<label for="max-writers" class="min-w-0 text-xs text-gray-600 dark:text-gray-400">
+						{$t('admin.taskAgentsAtOnce')}
+					</label>
+					<div class="flex shrink-0 items-center gap-1.5">
+						<input
+							id="max-writers"
+							type="number"
+							min="1"
+							max="16"
+							bind:value={maxWriters}
+							onchange={saveMaxWriters}
+							disabled={savingLimit}
+							class="w-16 h-7 px-2 rounded-lg text-xs bg-gray-100 dark:bg-white/6 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/8 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
+						/>
+						{#if savingLimit}<Spinner size={12} />{/if}
+					</div>
+				</div>
+				<p class="mt-1 text-[0.6875rem] text-gray-400 dark:text-gray-600">
+					{$t('admin.taskAgentsAtOnceHint')}
+				</p>
+			</div>
+		{/if}
 		<div class="divide-y divide-gray-100 dark:divide-white/5">
 			{#each profiles as profile, index (profile.id)}
 				<div class="group flex items-center gap-2 w-full min-h-9 py-1.5 text-left">

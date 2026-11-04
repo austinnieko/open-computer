@@ -118,6 +118,29 @@
 	});
 	let diffFor = $state<string | null>(null);
 	let diffFiles = $state<DiffFile[]>([]);
+	// Large diffs (hundreds of files) froze the page when every file rendered at
+	// once: list the files and render a file's lines only when it is opened.
+	const DIFF_AUTO_OPEN_LINES = 400;
+	let openDiffFiles = $state<Set<string>>(new Set());
+	function fileStats(file: DiffFile): { add: number; del: number; lines: number } {
+		let add = 0;
+		let del = 0;
+		let lines = 0;
+		for (const hunk of file.hunks) {
+			for (const line of hunk.lines) {
+				lines += 1;
+				if (line.type === 'added') add += 1;
+				else if (line.type === 'removed') del += 1;
+			}
+		}
+		return { add, del, lines };
+	}
+	function toggleDiffFile(path: string) {
+		const next = new Set(openDiffFiles);
+		if (next.has(path)) next.delete(path);
+		else next.add(path);
+		openDiffFiles = next;
+	}
 	let diffUntracked = $state<string[]>([]);
 	let diffLoading = $state(false);
 	let readiness = $state<{ ready: boolean; reasons: string[] } | null>(null);
@@ -162,6 +185,8 @@
 	const STATUS_CLASS: Record<string, string> = {
 		queued: 'bg-gray-100 text-gray-600 dark:bg-white/8 dark:text-gray-300',
 		awaiting_input: 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
+		waiting_slot: 'bg-gray-100 text-gray-600 dark:bg-white/8 dark:text-gray-300',
+		waiting_for_user: 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
 		running: 'bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300',
 		blocked: 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300',
 		paused: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
@@ -259,6 +284,9 @@
 		try {
 			const result = await getCoordTaskDiff(task.id);
 			diffFiles = result.files ?? [];
+			// Open everything only when the whole diff is small.
+			const total = diffFiles.reduce((n, f) => n + fileStats(f).lines, 0);
+			openDiffFiles = new Set(total <= DIFF_AUTO_OPEN_LINES ? diffFiles.map((f) => f.path) : []);
 			diffUntracked = result.untracked ?? [];
 		} catch (error: any) {
 			toast.error(error?.message ?? String(error));
@@ -709,7 +737,17 @@
 									{task.description}
 								</p>
 							{/if}
-							{#if task.meta.status_reason}
+							{#if displayStatus(task) === 'waiting_for_user'}
+								<p class="mt-1 text-xs text-gray-500">{$t('coordination.waitingForUserHint')}</p>
+							{:else if displayStatus(task) === 'waiting_slot'}
+								<p class="mt-1 text-xs text-gray-500">
+									{$t('coordination.waitingSlotHint', {
+										running: coord.tasks.filter((t) => t.status === 'running' && t.worktree_path)
+											.length,
+										max: coord.maxWriters
+									})}
+								</p>
+							{:else if task.meta.status_reason}
 								<p class="mt-1 text-xs text-gray-500">{task.meta.status_reason}</p>
 							{/if}
 						</div>
@@ -836,14 +874,36 @@
 								{:else if !diffFiles.length && !diffUntracked.length}
 									<div class="p-3 text-xs text-gray-500">{$t('coordination.noChanges')}</div>
 								{:else}
+									<div
+										class="border-b border-gray-100 px-2 py-1 text-[0.6875rem] text-gray-500 dark:border-white/6"
+									>
+										{$t('coordination.diffFiles', { count: diffFiles.length })}
+									</div>
 									<div class="overflow-x-auto font-mono text-[0.6875rem] leading-[1.125rem]">
-										{#each diffFiles as file}
-											<div
-												class="sticky top-0 border-b border-gray-100 bg-gray-50 px-2 py-1 text-[0.625rem] font-medium text-gray-500 dark:border-white/4 dark:bg-white/3 dark:text-gray-400"
+										{#each diffFiles as file (file.path)}
+											{@const stats = fileStats(file)}
+											{@const open = openDiffFiles.has(file.path)}
+											<button
+												type="button"
+												class="sticky top-0 flex w-full items-center gap-1.5 border-b border-gray-100 bg-gray-50 px-2 py-1 text-left text-[0.625rem] font-medium text-gray-500 hover:bg-gray-100 dark:border-white/4 dark:bg-white/3 dark:text-gray-400 dark:hover:bg-white/6"
+												aria-expanded={open}
+												onclick={() => toggleDiffFile(file.path)}
 											>
-												{file.path}
-											</div>
-											<DiffHunkList hunks={file.hunks} path={file.path} showNumbers />
+												<span
+													class="flex shrink-0"
+													style="transform: rotate({open ? '90deg' : '0deg'})"
+												>
+													<Icon name="chevron-right" size={9} />
+												</span>
+												<span class="min-w-0 flex-1 truncate">{file.path}</span>
+												<span class="shrink-0 text-emerald-600 dark:text-emerald-400"
+													>+{stats.add}</span
+												>
+												<span class="shrink-0 text-red-600 dark:text-red-400">−{stats.del}</span>
+											</button>
+											{#if open}
+												<DiffHunkList hunks={file.hunks} path={file.path} showNumbers />
+											{/if}
 										{/each}
 									</div>
 									{#if diffUntracked.length}

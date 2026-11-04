@@ -125,6 +125,8 @@
 		running: 'running',
 		queued: 'waiting',
 		awaiting_input: 'waiting',
+		waiting_slot: 'waiting',
+		waiting_for_user: 'waiting',
 		blocked: 'attention',
 		paused: 'attention',
 		reviewing: 'review',

@@ -3083,6 +3083,13 @@ async def run_chat_task(
                 )
             except Exception:
                 logger.debug("[task %s] active-state emit failed", message_id[:8], exc_info=True)
+            # A coordinated task whose agent is now idle frees its slot.
+            try:
+                from cptr.utils.coordination.coordinator import on_turn_end
+
+                asyncio.create_task(on_turn_end(chat_id))
+            except Exception:
+                logger.debug("[task %s] coordination turn-end hook failed", message_id[:8])
         try:
             await export_chat_to_file(request, chat_id)
         except Exception:

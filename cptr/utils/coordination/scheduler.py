@@ -27,8 +27,8 @@ from cptr.utils.coordination import registry
 logger = logging.getLogger(__name__)
 
 READY = {"integration_ready", "completed"}
-DEFAULT_MAX_WRITERS = 2
-DEFAULT_MAX_READERS = 2
+DEFAULT_MAX_WRITERS = 4
+DEFAULT_MAX_READERS = 4
 
 # Test hook: replaces the real "start a turn in this chat" call.
 _launcher_override = None
