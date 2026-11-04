@@ -228,6 +228,7 @@ class EventTranslator:
         self._streamed: dict[tuple[str, str, int], str] = {}
         self._tool_names: dict[str, str] = {}
         self._tool_inputs: dict[str, dict[str, Any]] = {}
+        self._permission_requests: set[tuple[str, tuple[str, ...]]] = set()
         self.started = False
         self.finished = False
         self.error: str | None = None
@@ -298,16 +299,7 @@ class EventTranslator:
             )
             return [self._tool(data, "failed", output)]
         if event_type == "permission.asked":
-            action = str(data.get("action") or "a tool")
-            resources = ", ".join(str(r) for r in data.get("resources") or [])
-            target = f" on {resources}" if resources else ""
-            return [
-                AgentTextDelta(
-                    f"\n\n> OpenCode is waiting for permission to run `{action}`{target}. "
-                    "Approve it in the OpenCode app or TUI, or allow it in your OpenCode "
-                    "agent permissions.\n\n"
-                )
-            ]
+            return self._permission_notice(data)
         if event_type == "session.execution.failed":
             error = data.get("error") if isinstance(data.get("error"), dict) else {}
             self.error = str(error.get("message") or "OpenCode run failed")
@@ -323,6 +315,26 @@ class EventTranslator:
         elif event_type == "session.idle" and self.started:
             self.finished = True
         return []
+
+    def _permission_notice(self, data: dict[str, Any]) -> list[AgentEvent]:
+        """One short line per new permission request; the how-to only once."""
+        action = str(data.get("action") or "a tool")
+        resources = tuple(str(r) for r in data.get("resources") or [])
+        key = (action, resources)
+        if key in self._permission_requests:
+            return []
+        first = not self._permission_requests
+        self._permission_requests.add(key)
+        shown = ", ".join(f"`{r}`" for r in resources[:3])
+        if len(resources) > 3:
+            shown += f" and {len(resources) - 3} more"
+        line = f"Waiting for permission: `{action}`" + (f" on {shown}" if shown else "")
+        if first:
+            line += (
+                ". Approve it in the OpenCode app or TUI, or allow it in your OpenCode "
+                "agent permissions"
+            )
+        return [AgentTextDelta(f"\n\n⏸ {line}.\n\n" if first else f"\n⏸ {line}.\n")]
 
 
 def _content_text(content: Any) -> str | None:

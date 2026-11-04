@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.27] - 2026-11-04
+
+### Changed
+
+- 🌳 **Chats and agents as a tree in the sidebar.** Each workspace in the sidebar now has an always-visible arrow to show or hide its chats, indented under it. The workspace you're in opens on its own, and whatever you open or close is remembered. Chats that handed work to sub-agents get a collapsible Agents branch listing each agent with a live status dot. The branch opens on its own while an agent is working, and clicking an agent jumps to its card. Up to 8 chats show per workspace before "Show more".
+- ✋ **Quieter OpenCode permission requests.** When OpenCode waits for permission, the chat now shows one short line per new request, instead of a large quoted block for every file. The explanation of how to approve appears only once, and repeated requests for the same thing are not shown again.
+
 ## [0.9.26] - 2026-11-04
 
 ### Changed

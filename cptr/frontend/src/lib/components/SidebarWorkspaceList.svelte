@@ -19,8 +19,9 @@
 	import { t } from '$lib/i18n';
 	import { tooltip } from '$lib/tooltip';
 	import Sortable from 'sortablejs';
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, untrack } from 'svelte';
 	import ChatItem from './common/ChatItem.svelte';
+	import { describeActivity, subagentsOf } from '$lib/stores/subagents.svelte';
 	import DropdownMenu from './DropdownMenu.svelte';
 	import Icon from './Icon.svelte';
 
@@ -37,23 +38,79 @@
 	let unbindSocketListener: (() => void) | null = null;
 	let workspacesExpanded = $state(true);
 
-	let expandedWorkspaces = $state<Set<string>>(new Set());
+	// Expanded/collapsed workspaces are remembered across reloads. The current
+	// workspace opens automatically unless you collapsed it yourself.
+	const EXPANDED_KEY = 'cptr.sidebar.expanded';
+	const COLLAPSED_KEY = 'cptr.sidebar.collapsed';
+	function readSet(key: string): Set<string> {
+		try {
+			return new Set(JSON.parse(localStorage.getItem(key) || '[]'));
+		} catch {
+			return new Set();
+		}
+	}
+	function writeSet(key: string, value: Set<string>) {
+		try {
+			localStorage.setItem(key, JSON.stringify([...value]));
+		} catch {
+			/* private mode */
+		}
+	}
+	let expandedWorkspaces = $state<Set<string>>(readSet(EXPANDED_KEY));
+	let collapsedByUser = readSet(COLLAPSED_KEY);
+	// Chats whose sub-agent branch is open (or closed) in the tree.
+	let agentBranches = $state<Record<string, boolean>>({});
 	let wsChatsCache = $state<Map<string, ChatInfo[]>>(new Map());
 	let wsChatsHasMore = $state<Map<string, boolean>>(new Map());
 	let wsChatsLoading = $state<Set<string>>(new Set());
 	let currentPath = $derived($currentWorkspace?.path ?? null);
 	let currentChatId = $derived($activeTab?.type === 'chat' ? $activeTab.path : null);
-	const WS_CHATS_PAGE_SIZE = 5;
+	const WS_CHATS_PAGE_SIZE = 8;
 
 	function toggleWorkspaceExpand(path: string) {
 		const next = new Set(expandedWorkspaces);
 		if (next.has(path)) {
 			next.delete(path);
+			collapsedByUser.add(path);
 		} else {
 			next.add(path);
+			collapsedByUser.delete(path);
 			if (!wsChatsCache.has(path)) fetchWorkspaceChats(path);
 		}
 		expandedWorkspaces = next;
+		writeSet(EXPANDED_KEY, next);
+		writeSet(COLLAPSED_KEY, collapsedByUser);
+	}
+
+	// Open the current workspace's tree, and load any remembered ones.
+	$effect(() => {
+		const path = currentPath;
+		if (!$chatEnabled) return;
+		if (path && !expandedWorkspaces.has(path) && !collapsedByUser.has(path)) {
+			expandedWorkspaces = new Set([...expandedWorkspaces, path]);
+		}
+		const toLoad = [...expandedWorkspaces];
+		untrack(() => {
+			for (const p of toLoad) {
+				if (!wsChatsCache.has(p) && !wsChatsLoading.has(p)) fetchWorkspaceChats(p);
+			}
+		});
+	});
+
+	function agentBranchOpen(chatId: string): boolean {
+		if (chatId in agentBranches) return agentBranches[chatId];
+		// Open by default while any of its sub-agents is working.
+		return subagentsOf(chatId).some((a) => a.status === 'running' || a.status === 'queued');
+	}
+
+	function openSubagent(chatId: string, wsPath: string, callId: string | null) {
+		openChat(chatId, wsPath);
+		if (!callId) return;
+		setTimeout(() => {
+			document
+				.getElementById(`subagent-${callId}`)
+				?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+		}, 400);
 	}
 
 	async function fetchWorkspaceChats(path: string, append = false, limit = WS_CHATS_PAGE_SIZE) {
@@ -351,27 +408,29 @@
 				>
 					{#if $chatEnabled}
 						<span
-							class="ws-icon-toggle shrink-0"
+							class="ws-chevron shrink-0"
 							role="button"
-							tabindex="-1"
+							tabindex="0"
 							onclick={(e) => {
 								e.stopPropagation();
 								e.preventDefault();
 								toggleWorkspaceExpand(ws.path);
 							}}
-							aria-label={isExpanded ? $t('sidebar.collapse') : $t('sidebar.addWorkspace')}
+							onkeydown={(e) => {
+								if (e.key === 'Enter' || e.key === ' ') {
+									e.preventDefault();
+									toggleWorkspaceExpand(ws.path);
+								}
+							}}
+							aria-label={isExpanded ? 'Collapse chats' : 'Show chats'}
+							aria-expanded={isExpanded}
 						>
-							<span class="ws-icon-folder"><Icon name="folder" size={14} /></span>
-							<span
-								class="ws-icon-chevron"
-								style="transform: rotate({isExpanded ? '90deg' : '0deg'})"
-							>
+							<span style="transform: rotate({isExpanded ? '90deg' : '0deg'})" class="flex">
 								<Icon name="chevron-right" size={11} />
 							</span>
 						</span>
-					{:else}
-						<Icon name="folder" size={14} />
 					{/if}
+					<Icon name="folder" size={14} />
 					<span class="min-w-0 truncate text-left">{ws.name}</span>
 					{#if ws.unread_count > 0}
 						<span
@@ -417,12 +476,48 @@
 						</div>
 					{:else if chats && chats.length > 0}
 						{#each chats as chat (chat.id)}
+							{@const agents = subagentsOf(chat.id)}
 							<ChatItem
 								{chat}
 								isSelected={chat.id === currentChatId}
 								onclick={() => openChat(chat.id, ws.path)}
 								onmenu={(e) => openChatMenu(e, chat.id, ws.path)}
 							/>
+							{#if agents.length}
+								{@const branchOpen = agentBranchOpen(chat.id)}
+								{@const working = agents.filter(
+									(a) => a.status === 'running' || a.status === 'queued'
+								).length}
+								<div class="ws-agents">
+									<button
+										type="button"
+										class="ws-agents-toggle"
+										aria-expanded={branchOpen}
+										onclick={() => (agentBranches = { ...agentBranches, [chat.id]: !branchOpen })}
+									>
+										<span style="transform: rotate({branchOpen ? '90deg' : '0deg'})" class="flex">
+											<Icon name="chevron-right" size={9} />
+										</span>
+										<span>Agents</span>
+										<span class="ws-agents-count">
+											{working ? `${working} working` : `${agents.length}`}
+										</span>
+									</button>
+									{#if branchOpen}
+										{#each agents as agent, i (agent.chat_id)}
+											<button
+												type="button"
+												class="ws-agent"
+												title={`${agent.task}\n${describeActivity(agent)}`}
+												onclick={() => openSubagent(chat.id, ws.path, agent.call_id)}
+											>
+												<span class="ws-agent-dot ws-agent-{agent.status}"></span>
+												<span class="truncate">Agent {i + 1}: {agent.task}</span>
+											</button>
+										{/each}
+									{/if}
+								</div>
+							{/if}
 						{/each}
 						{#if hasMoreChats}
 							<button
@@ -492,49 +587,89 @@
 		margin-bottom: 0.125rem;
 	}
 
-	.ws-icon-toggle {
-		position: relative;
+	.ws-chevron {
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		width: 0.875rem;
 		height: 0.875rem;
-		cursor: pointer;
+		border-radius: 0.25rem;
+		color: var(--app-fg-muted, #9ca3af);
 	}
 
-	.ws-icon-folder {
-		display: flex;
-		transition: opacity 0.1s;
+	.ws-chevron:hover {
+		color: var(--app-fg, inherit);
+		background: var(--app-hover, rgba(127, 127, 127, 0.12));
 	}
 
-	.ws-icon-chevron {
-		position: absolute;
-		inset: 0;
+	.ws-agents {
+		margin-left: 0.75rem;
+		border-left: 1px solid var(--app-border, rgba(127, 127, 127, 0.2));
+		padding-left: 0.25rem;
+	}
+
+	.ws-agents-toggle,
+	.ws-agent {
 		display: flex;
 		align-items: center;
-		justify-content: center;
-		opacity: 0;
-		transition:
-			opacity 0.1s,
-			transform 0.1s;
-		color: var(--app-fg-subtle);
+		gap: 0.375rem;
+		width: 100%;
+		height: 1.375rem;
+		padding: 0 0.375rem;
+		border-radius: 0.375rem;
+		font-size: 0.6875rem;
+		color: var(--app-fg-muted, #9ca3af);
+		text-align: left;
 	}
 
-	:global(.dark) .ws-icon-chevron {
-		color: var(--app-fg-muted);
+	.ws-agents-toggle:hover,
+	.ws-agent:hover {
+		background: var(--app-hover, rgba(127, 127, 127, 0.08));
+		color: var(--app-fg, inherit);
 	}
 
-	.ws-icon-toggle:hover .ws-icon-folder {
-		opacity: 0;
+	.ws-agents-count {
+		margin-left: auto;
+		font-variant-numeric: tabular-nums;
 	}
 
-	.ws-icon-toggle:hover .ws-icon-chevron {
-		opacity: 1;
+	.ws-agent-dot {
+		width: 0.375rem;
+		height: 0.375rem;
+		border-radius: 9999px;
+		flex-shrink: 0;
+		background: #9ca3af;
+	}
+
+	.ws-agent-running {
+		background: #3b82f6;
+		animation: ws-agent-pulse 1.4s ease-in-out infinite;
+	}
+
+	.ws-agent-done {
+		background: #10b981;
+	}
+
+	.ws-agent-failed {
+		background: #ef4444;
+	}
+
+	.ws-agent-stopped {
+		background: #f59e0b;
+	}
+
+	@keyframes ws-agent-pulse {
+		50% {
+			opacity: 0.35;
+		}
 	}
 
 	.ws-chats {
 		margin-top: 0.125rem;
+		margin-left: 0.875rem;
+		padding-left: 0.25rem;
 		padding-bottom: 0.25rem;
+		border-left: 1px solid var(--app-border, rgba(127, 127, 127, 0.2));
 	}
 
 	.ws-chat-show-more {

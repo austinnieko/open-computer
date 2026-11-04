@@ -408,7 +408,7 @@ class OpenCodeV2Tests(unittest.IsolatedAsyncioTestCase):
             _event("session.execution.succeeded", sessionID="$SESSION"),
         ]
         events = await _run(_profile(self.mock.url))
-        self.assertIn("waiting for permission to run `bash` on rm -rf build", _text(events))
+        self.assertIn("Waiting for permission: `bash` on `rm -rf build`", _text(events))
         self.assertFalse([p for _, p, _ in self.mock.requests if "/permission" in p])
 
     async def test_cancel_interrupts_the_session(self):
@@ -506,6 +506,30 @@ class ApiVersionTests(unittest.IsolatedAsyncioTestCase):
 
         version = await self._detect(lambda r: httpx.Response(200, json={"data": {}}))
         self.assertEqual(version, opencode_v2.API_V2)
+
+
+class PermissionNoticeTests(unittest.TestCase):
+    def test_repeats_collapse_and_advice_shows_once(self):
+        t = opencode_v2.EventTranslator(SESSION)
+
+        def ask(action, *resources):
+            return t.translate(
+                _event(
+                    "permission.asked",
+                    id="per_x",
+                    sessionID=SESSION,
+                    action=action,
+                    resources=list(resources),
+                )
+            )
+
+        first = "".join(e.text for e in ask("external_directory", "/home/a/x.py"))
+        again = ask("external_directory", "/home/a/x.py")
+        second = "".join(e.text for e in ask("external_directory", "/home/a/y.py"))
+        self.assertIn("Approve it in the OpenCode app", first)
+        self.assertEqual(again, [])
+        self.assertNotIn("Approve it", second)
+        self.assertIn("`/home/a/y.py`", second)
 
 
 class PasswordAndManagedServerTests(unittest.IsolatedAsyncioTestCase):
