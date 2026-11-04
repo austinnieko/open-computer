@@ -90,30 +90,6 @@ function isSupportedTab(tab: { type?: unknown }): tab is Tab {
 	return typeof tab.type === 'string' && SUPPORTED_TAB_TYPES.has(tab.type);
 }
 
-/**
- * Keep one chat view per pane (chats are listed in the sidebar): drop every
- * chat tab except `keepId`, or the active one, or the last one.
- */
-function foldChatTabs<G extends { tabs: Tab[]; activeTabId: string; tabHistory?: string[] }>(
-	group: G,
-	keepId?: string
-): G {
-	const chats = group.tabs.filter((t) => t.type === 'chat');
-	if (chats.length <= 1) return group;
-	const keep =
-		chats.find((t) => t.id === keepId) ??
-		chats.find((t) => t.id === group.activeTabId) ??
-		chats[chats.length - 1];
-	const tabs = group.tabs.filter((t) => t.type !== 'chat' || t.id === keep.id);
-	const ids = new Set(tabs.map((t) => t.id));
-	return {
-		...group,
-		tabs,
-		activeTabId: ids.has(group.activeTabId) ? group.activeTabId : keep.id,
-		tabHistory: (group.tabHistory ?? []).filter((id) => ids.has(id))
-	};
-}
-
 export type SplitDirection = 'horizontal' | 'vertical';
 
 export interface EditorGroup {
@@ -615,7 +591,6 @@ export async function loadPreferences(): Promise<void> {
 			const aliveTerminals = new Set(terminalIds.map((session) => session.session_id));
 			const aliveBrowsers = new Set(browserIds);
 			let groups = savedHomeState.groups
-				.map((group) => foldChatTabs(group))
 				.map((group) => {
 					const tabs = group.tabs.filter((tab): tab is Tab => isSupportedTab(tab));
 					const liveTabs = tabs
@@ -645,6 +620,7 @@ export async function loadPreferences(): Promise<void> {
 					{
 						id: 'home',
 						tabs: [{ id: 'home', type: 'home', label: 'Home', permanent: true }],
+						tabHistory: [],
 						activeTabId: 'home'
 					}
 				];
@@ -752,7 +728,6 @@ export async function loadWorkspace(path: string): Promise<void> {
 
 			// Remove dead terminal tabs from all groups
 			const cleanedGroups = ws.groups
-				.map((g) => foldChatTabs(g))
 				.map((g) => {
 					const filteredTabs = g.tabs.filter((t: Tab) => {
 						if (t.type === 'terminal' && t.sessionId && !aliveSessions.has(t.sessionId)) {
@@ -1268,9 +1243,9 @@ export async function openBrowserTab(
 }
 
 /**
- * Show a chat in a pane. Each pane has one chat view: opening another chat
- * swaps what it shows instead of adding a tab (chats are listed in the
- * sidebar). A chat already open in another pane is focused there instead.
+ * Open a chat. Any number of chats can be open; they are listed under the
+ * workspace in the sidebar rather than as tabs in the top bar. A chat that is
+ * already open (in any pane) is brought to the front instead of reopened.
  */
 export function openChatTab(chatId?: string, targetGroupId?: string): void {
 	const ws = get(currentWorkspace);
@@ -1281,10 +1256,7 @@ export function openChatTab(chatId?: string, targetGroupId?: string): void {
 			const open = g.tabs.find((t) => t.type === 'chat' && t.path === chatId);
 			if (open) {
 				setActiveGroup(g.id);
-				updateGroupTabs(g.id, (tabs) => {
-					const folded = foldChatTabs({ tabs, activeTabId: open.id }, open.id);
-					return { tabs: folded.tabs, activeTabId: open.id };
-				});
+				setActiveTab(open.id, g.id);
 				return;
 			}
 		}
@@ -1294,35 +1266,24 @@ export function openChatTab(chatId?: string, targetGroupId?: string): void {
 	const group = ws.groups.find((g) => g.id === gid);
 	if (!group) return;
 
-	const nextTab: Tab = {
+	if (!chatId) {
+		// Reuse an open draft rather than stacking empty new chats.
+		const draft = group.tabs.find(
+			(t) => t.type === 'chat' && (t.path?.startsWith('new-') || t.path?.startsWith('pending-'))
+		);
+		if (draft) {
+			setActiveTab(draft.id, gid);
+			return;
+		}
+	}
+
+	const newTab: Tab = {
 		id: nextId(),
 		type: 'chat',
 		label: chatId ? 'Chat' : 'New Chat',
 		path: chatId || `new-${Date.now()}`
 	};
-	const chatTabs = group.tabs.filter((t) => t.type === 'chat');
-	if (!chatId) {
-		const draft = chatTabs.find(
-			(t) => t.path?.startsWith('new-') || t.path?.startsWith('pending-')
-		);
-		if (draft && chatTabs.length === 1) {
-			setActiveTab(draft.id, gid);
-			return;
-		}
-	}
-	// Replace the pane's chat view (and fold away any extra chat tabs left from
-	// before). Running chats keep running on the server.
-	const keep = chatTabs.find((t) => t.id === group.activeTabId) ?? chatTabs[0];
-	updateGroupTabs(gid, (tabs) => {
-		const at = keep ? tabs.findIndex((t) => t.id === keep.id) : -1;
-		const rest = tabs.filter((t) => t.type !== 'chat');
-		if (at < 0) return { tabs: [...rest, nextTab], activeTabId: nextTab.id };
-		const before = tabs.slice(0, at).filter((t) => t.type !== 'chat').length;
-		return {
-			tabs: [...rest.slice(0, before), nextTab, ...rest.slice(before)],
-			activeTabId: nextTab.id
-		};
-	});
+	updateGroupTabs(gid, (tabs) => ({ tabs: [...tabs, newTab], activeTabId: newTab.id }));
 }
 
 /** Open a chat in its own pane beside the current one. */

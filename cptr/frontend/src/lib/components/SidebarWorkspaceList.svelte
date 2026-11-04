@@ -7,7 +7,8 @@
 		sidebarOpen,
 		activeTab,
 		currentWorkspace,
-		openChatInSplit
+		openChatInSplit,
+		closeTab
 	} from '$lib/stores';
 	import { chatEnabled, updateChatStatuses } from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
@@ -67,6 +68,42 @@
 	let currentPath = $derived($currentWorkspace?.path ?? null);
 	let currentChatId = $derived($activeTab?.type === 'chat' ? $activeTab.path : null);
 	const WS_CHATS_PAGE_SIZE = 8;
+
+	// Chats open in the current workspace (what used to be tabs in the top bar),
+	// listed first under it. Titles come from the chat list when known.
+	type OpenChat = { tabId: string; groupId: string; chat: ChatInfo };
+	const openChats = $derived.by((): OpenChat[] => {
+		const ws = $currentWorkspace;
+		if (!ws) return [];
+		const known = new Map((wsChatsCache.get(ws.path) ?? []).map((c) => [c.id, c]));
+		const seen = new Set<string>();
+		const out: OpenChat[] = [];
+		for (const g of ws.groups) {
+			for (const t of g.tabs) {
+				if (t.type !== 'chat' || !t.path || seen.has(t.path)) continue;
+				seen.add(t.path);
+				const draft = t.path.startsWith('new-') || t.path.startsWith('pending-');
+				const chat: ChatInfo = known.get(t.path) ?? {
+					id: t.path,
+					title: t.label || (draft ? 'New chat' : 'Chat'),
+					summary: null,
+					folder: '',
+					meta: null,
+					current_message_id: null,
+					created_at: 0,
+					updated_at: 0,
+					last_read_at: null
+				};
+				out.push({ tabId: t.id, groupId: g.id, chat });
+			}
+		}
+		return out;
+	});
+	const openChatIds = $derived(new Set(openChats.map((o) => o.chat.id)));
+
+	function closeOpenChat(o: OpenChat) {
+		void closeTab(o.tabId, o.groupId);
+	}
 
 	function toggleWorkspaceExpand(path: string) {
 		const next = new Set(expandedWorkspaces);
@@ -509,50 +546,17 @@
 							<span class="ws-chat-loading-dot"></span>
 							<span class="ws-chat-loading-dot"></span>
 						</div>
-					{:else if chats && chats.length > 0}
-						{#each chats as chat (chat.id)}
-							{@const agents = subagentsOf(chat.id)}
-							<ChatItem
-								{chat}
-								isSelected={chat.id === currentChatId}
-								onclick={() => openChat(chat.id, ws.path)}
-								onmenu={(e) => openChatMenu(e, chat.id, ws.path)}
-							/>
-							{#if agents.length}
-								{@const branchOpen = agentBranchOpen(chat.id)}
-								{@const working = agents.filter(
-									(a) => a.status === 'running' || a.status === 'queued'
-								).length}
-								<div class="ws-agents">
-									<button
-										type="button"
-										class="ws-agents-toggle"
-										aria-expanded={branchOpen}
-										onclick={() => (agentBranches = { ...agentBranches, [chat.id]: !branchOpen })}
-									>
-										<span style="transform: rotate({branchOpen ? '90deg' : '0deg'})" class="flex">
-											<Icon name="chevron-right" size={9} />
-										</span>
-										<span>Agents</span>
-										<span class="ws-agents-count">
-											{working ? `${working} working` : `${agents.length}`}
-										</span>
-									</button>
-									{#if branchOpen}
-										{#each agents as agent, i (agent.chat_id)}
-											<button
-												type="button"
-												class="ws-agent"
-												title={`${agent.task}\n${describeActivity(agent)}`}
-												onclick={() => openSubagent(chat.id, ws.path, agent.call_id)}
-											>
-												<span class="ws-agent-dot ws-agent-{agent.status}"></span>
-												<span class="truncate">Agent {i + 1}: {agent.task}</span>
-											</button>
-										{/each}
-									{/if}
-								</div>
+					{:else if (chats && chats.length > 0) || (ws.path === currentPath && openChats.length > 0)}
+						{#if ws.path === currentPath && openChats.length > 0}
+							{#each openChats as o (o.chat.id)}
+								{@render chatRow(o.chat, ws.path, o)}
+							{/each}
+							{#if (chats ?? []).some((c) => !openChatIds.has(c.id))}
+								<div class="ws-chats-divider"></div>
 							{/if}
+						{/if}
+						{#each (chats ?? []).filter((c) => ws.path !== currentPath || !openChatIds.has(c.id)) as chat (chat.id)}
+							{@render chatRow(chat, ws.path, null)}
 						{/each}
 						{#if hasMoreChats}
 							<button
@@ -575,6 +579,51 @@
 		</div>
 	{/if}
 </div>
+
+{#snippet chatRow(chat: ChatInfo, wsPath: string, open: OpenChat | null)}
+	{@const agents = subagentsOf(chat.id)}
+	<ChatItem
+		{chat}
+		isSelected={chat.id === currentChatId}
+		isOpen={!!open}
+		onclick={() => openChat(chat.id, wsPath)}
+		onclose={open ? () => closeOpenChat(open) : undefined}
+		onmenu={open && !chat.created_at ? undefined : (e) => openChatMenu(e, chat.id, wsPath)}
+	/>
+	{#if agents.length}
+		{@const branchOpen = agentBranchOpen(chat.id)}
+		{@const working = agents.filter((a) => a.status === 'running' || a.status === 'queued').length}
+		<div class="ws-agents">
+			<button
+				type="button"
+				class="ws-agents-toggle"
+				aria-expanded={branchOpen}
+				onclick={() => (agentBranches = { ...agentBranches, [chat.id]: !branchOpen })}
+			>
+				<span style="transform: rotate({branchOpen ? '90deg' : '0deg'})" class="flex">
+					<Icon name="chevron-right" size={9} />
+				</span>
+				<span>Agents</span>
+				<span class="ws-agents-count">
+					{working ? `${working} working` : `${agents.length}`}
+				</span>
+			</button>
+			{#if branchOpen}
+				{#each agents as agent, i (agent.chat_id)}
+					<button
+						type="button"
+						class="ws-agent"
+						title={`${agent.task}\n${describeActivity(agent)}`}
+						onclick={() => openSubagent(chat.id, wsPath, agent.call_id)}
+					>
+						<span class="ws-agent-dot ws-agent-{agent.status}"></span>
+						<span class="truncate">Agent {i + 1}: {agent.task}</span>
+					</button>
+				{/each}
+			{/if}
+		</div>
+	{/if}
+{/snippet}
 
 {#if wsMenuPath && wsMenuAnchor}
 	<DropdownMenu
@@ -710,6 +759,12 @@
 		padding-left: 0.25rem;
 		padding-bottom: 0.25rem;
 		border-left: 1px solid var(--app-border, rgba(127, 127, 127, 0.2));
+	}
+
+	.ws-chats-divider {
+		height: 1px;
+		margin: 0.25rem 0.5rem;
+		background: var(--app-border, rgba(127, 127, 127, 0.2));
 	}
 
 	.ws-chat-show-more {

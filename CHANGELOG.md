@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.30] - 2026-11-04
+
+### Changed
+
+- 🗂️ **Open several chats at once again, listed in the sidebar.** 0.9.28 limited each pane to one chat, so opening a chat closed the one you had. Chats now stay open until you close them, as they did when they were tabs. Instead of tabs across the top, your open chats are listed first under the workspace in the sidebar. The one you're viewing is highlighted, and each has an × to close it. Your other recent chats follow below a divider. Clicking an open chat switches to it, including from a file. Starting a new chat adds it to the open list.
+
 ## [0.9.29] - 2026-11-04
 
 ### Changed
