@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.22] - 2026-11-03
+
+### Fixed
+
+- 🛠️ **Local models no longer stop partway through a task.** With Qwen and other models served through Ollama, llama.cpp, vLLM, or LM Studio, a tool call could be silently dropped when the server didn't mark the reply as a tool call. The chat then ended as if the model had finished. Tool calls are now picked up however the server ends the reply.
+- 💥 **Tool calls with missing details no longer crash the chat.** Tool calls without arguments, an ID, or a position number used to stop the whole chat with an error. Arguments that can't be read now come back to the model as a tool error it can fix and retry.
+
 ## [0.9.21] - 2026-08-04
 
 ### Added

@@ -623,6 +623,67 @@ def _to_openai_messages(
     return result
 
 
+def _accumulate_tool_call_delta(tool_calls: dict[int, dict], tc: dict) -> None:
+    """Merge one streamed Chat Completions tool-call delta into ``tool_calls``.
+
+    Tolerates servers that omit ``index`` or ``id``, or send ``function.name`` /
+    ``arguments`` as null.
+    """
+    function = tc.get("function") or {}
+    call_id = tc.get("id")
+    idx = tc.get("index")
+    if idx is None:
+        known = next((i for i, c in tool_calls.items() if call_id and c["id"] == call_id), None)
+        if known is not None:
+            idx = known
+        elif call_id or function.get("name") or not tool_calls:
+            idx = max(tool_calls, default=-1) + 1
+        else:
+            idx = max(tool_calls)
+    entry = tool_calls.get(idx)
+    if entry is None:
+        entry = tool_calls[idx] = {
+            "id": call_id or f"call_{uuid.uuid4().hex[:24]}",
+            "name": function.get("name") or "",
+            "arguments_json": "",
+        }
+    elif function.get("name") and not entry["name"]:
+        entry["name"] = function["name"]
+    entry["arguments_json"] += function.get("arguments") or ""
+
+
+def _parse_tool_arguments(name: str, raw: str) -> dict:
+    """Parse streamed tool arguments; never raise on empty or malformed JSON."""
+    if not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning(
+            "[stream] tool call %s has invalid JSON arguments; passing {} so the model sees a tool error: %r",
+            name,
+            raw[:500],
+        )
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _drain_tool_calls(tool_calls: dict[int, dict]):
+    """Yield accumulated tool calls once, in index order, and clear them."""
+    for idx in sorted(tool_calls):
+        tc = tool_calls[idx]
+        if not tc["name"]:
+            logger.warning("[stream] dropping tool call %s with no function name", tc["id"])
+            continue
+        yield {
+            "type": "tool_call",
+            "call_id": tc["id"],
+            "name": tc["name"],
+            "arguments": _parse_tool_arguments(tc["name"], tc["arguments_json"]),
+        }
+    tool_calls.clear()
+
+
 async def stream_openai_completions(
     form_data: ChatCompletionForm,
     url: str,
@@ -754,29 +815,21 @@ async def stream_openai_completions(
                                 yield {"type": "output", "item": item}
 
                         for tc in delta.get("tool_calls") or []:
-                            idx = tc["index"]
-                            if idx not in tool_calls:
-                                tool_calls[idx] = {
-                                    "id": tc["id"],
-                                    "name": tc["function"]["name"],
-                                    "arguments_json": "",
-                                }
-                            tool_calls[idx]["arguments_json"] += tc["function"].get("arguments", "")
+                            _accumulate_tool_call_delta(tool_calls, tc)
 
-                        if choices and choices[0].get("finish_reason") == "tool_calls":
+                        # Many OpenAI-compatible servers (Ollama, some llama.cpp
+                        # and vLLM builds) end a tool-call turn with
+                        # finish_reason "stop" or none at all. Emit whatever was
+                        # accumulated on any finish, and again at end of stream.
+                        if choices and choices[0].get("finish_reason") and tool_calls:
                             # Emit accumulated reasoning before tool calls
                             item = complete_reasoning_item()
                             if item is not None:
                                 emitted = True
                                 yield {"type": "output", "item": item}
-                            for tc in tool_calls.values():
+                            for event in _drain_tool_calls(tool_calls):
                                 emitted = True
-                                yield {
-                                    "type": "tool_call",
-                                    "call_id": tc["id"],
-                                    "name": tc["name"],
-                                    "arguments": json.loads(tc["arguments_json"]),
-                                }
+                                yield event
 
                         if chunk.get("usage"):
                             # Emit any remaining reasoning BEFORE usage
@@ -805,6 +858,10 @@ async def stream_openai_completions(
                     if item is not None:
                         emitted = True
                         yield {"type": "output", "item": item}
+                    # Tool calls the server never closed with a finish_reason.
+                    for event in _drain_tool_calls(tool_calls):
+                        emitted = True
+                        yield event
                     if not emitted:
                         raise EmptyCompletionError(
                             "Upstream provider returned an empty completion with no text, "
