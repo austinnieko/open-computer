@@ -249,6 +249,24 @@ class DeleteTaskChatTests(ApiTestCase):
         self.assertIsNone(await CoordTask.get_by_id(task["id"]))
 
 
+class LimitsTests(ApiTestCase):
+    async def test_default_is_four_and_admin_can_change_it(self):
+        limits = (await self.client.get("/api/coordination/limits")).json()
+        self.assertEqual(limits["max_writers"], 4)
+        response = await self.client.put("/api/coordination/limits", json={"max_writers": 6})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["max_writers"], 6)
+        listed = (await self.client.get(f"/api/coordination/tasks?root={self.repo}")).json()
+        self.assertEqual(listed["limits"]["max_writers"], 6)
+
+    async def test_non_admin_cannot_change_it_and_range_is_checked(self):
+        bad = await self.client.put("/api/coordination/limits", json={"max_writers": 0})
+        self.assertEqual(bad.status_code, 422)
+        self.client.cookies.set("cptr_session", create_token("someone-else", "other", "user"))
+        response = await self.client.put("/api/coordination/limits", json={"max_writers": 8})
+        self.assertEqual(response.status_code, 403)
+
+
 class UsageTests(ApiTestCase):
     async def test_usage_sums_task_chats_and_totals(self):
         from cptr.models.chats import ChatMessage

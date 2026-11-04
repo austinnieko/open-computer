@@ -37,6 +37,7 @@ export interface CoordState {
 	usage: Record<string, TaskUsage>;
 	usageTotals: TaskUsage | null;
 	activeChats: Set<string>;
+	maxWriters: number;
 }
 
 interface Entry {
@@ -59,6 +60,7 @@ function empty(): CoordState {
 		error: '',
 		notRepo: false,
 		repoRoot: '',
+		maxWriters: 2,
 		tasks: [],
 		dependencies: [],
 		conflicts: [],
@@ -128,6 +130,7 @@ export async function refresh(root: string): Promise<void> {
 		if (seq !== entry.seq) return;
 		entry.state.repoRoot = tasks.repo_root;
 		entry.state.tasks = tasks.tasks;
+		if (tasks.limits) entry.state.maxWriters = tasks.limits.max_writers;
 		entry.state.dependencies = tasks.dependencies;
 		entry.state.activeChats = new Set(tasks.active_chats);
 		entry.state.conflicts = conflicts.conflicts;
@@ -210,6 +213,10 @@ export function levelRank(level: string): number {
  */
 export function displayStatus(task: CoordTask): string {
 	if (task.chat_missing && !['completed', 'ended'].includes(task.status)) return 'chat_deleted';
+	if (task.status === 'queued' && task.meta?.waiting_for_user && !(task.blockers ?? []).length) {
+		// Its agent finished a turn and is idle; the user's next message continues it.
+		return 'waiting_for_user';
+	}
 	if (
 		task.status === 'queued' &&
 		task.chat_id &&
@@ -217,6 +224,10 @@ export function displayStatus(task: CoordTask): string {
 		!(task.blockers ?? []).length
 	) {
 		return 'awaiting_input';
+	}
+	if (task.status === 'queued' && task.meta?.start && !(task.blockers ?? []).length) {
+		// Has instructions and nothing blocks it: waiting for an agent slot.
+		return 'waiting_slot';
 	}
 	return task.status;
 }

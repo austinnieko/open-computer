@@ -295,11 +295,13 @@ async def on_turn_start(chat_id: str, chat_meta: dict | None) -> str:
         )
         task = await CoordTask.get_by_id(task.id)
     elif task.status in {"queued", "paused"}:
-        await CoordTask.update_fields(task.id, expect_status=task.status, status="running")
-        await _emit(
-            {task.user_id},
-            {"type": "coord:task", "task": (await CoordTask.get_by_id(task.id)).to_dict()},
+        meta = dict(task.meta or {})
+        meta.pop("waiting_for_user", None)
+        await CoordTask.update_fields(
+            task.id, expect_status=task.status, status="running", meta=meta
         )
+        task = await CoordTask.get_by_id(task.id)  # later writes must not restore old meta
+        await _emit({task.user_id}, {"type": "coord:task", "task": task.to_dict()})
     block = ""
     if not (task.meta or {}).get("briefed_at"):
         # First turn in this task's chat: tell the agent what the task is, so
@@ -315,6 +317,66 @@ async def on_turn_start(chat_id: str, chat_meta: dict | None) -> str:
             + ". Avoid changes that deepen the conflict; resolve it or ask the user."
         )
     return block
+
+
+# Seconds to wait after a turn ends before calling the task idle: an agent often
+# resumes itself right away (e.g. when its background sub-agents report back).
+TURN_END_GRACE_S = 3.0
+
+
+async def _root_chat_id(chat_id: str) -> str:
+    """The top-level chat a sub-agent chat belongs to (itself if it has no parent)."""
+    from cptr.models.chats import Chat
+
+    current = chat_id
+    for _ in range(10):
+        chat = await Chat.get_by_id(current)
+        parent = ((chat.meta if chat else None) or {}).get("parent_chat_id")
+        if not parent:
+            return current
+        current = parent
+    return current
+
+
+async def on_turn_end(chat_id: str, *, grace: float | None = None) -> str | None:
+    """A turn ended in ``chat_id``. If its task's agent is now idle, mark it waiting.
+
+    Idle means: no turn running in the task chat or any of its sub-agent chats and
+    no pending timers. The task moves from ``running`` to ``queued`` with
+    ``meta.waiting_for_user`` (shown as "Waiting for you"), which frees its slot
+    so the scheduler can start the next queued task. The user's next message moves
+    it back to running. Returns the task id when it was marked waiting.
+    """
+    from cptr.models.chats import Chat
+    from cptr.utils.chat_task import get_active_chat_ids
+
+    root = await _root_chat_id(chat_id)
+    task = await CoordTask.get_by_chat(root)
+    if not task or task.status != "running":
+        return None
+    await asyncio.sleep(TURN_END_GRACE_S if grace is None else grace)
+    task = await CoordTask.get_by_id(task.id)
+    if not task or task.status != "running":
+        return None
+    active = get_active_chat_ids()
+    if root in active:
+        return None
+    descendants = await Chat.get_internal_descendants(root)
+    if any(child.id in active for child in descendants):
+        return None  # still working through its sub-agents
+    if await Chat.get_pending_timers(root):
+        return None  # it scheduled itself to continue later
+    meta = {**(task.meta or {}), "waiting_for_user": now_ms()}
+    if not await CoordTask.update_fields(
+        task.id, expect_status="running", status="queued", meta=meta
+    ):
+        return None
+    await _emit(
+        {task.user_id},
+        {"type": "coord:task", "task": (await CoordTask.get_by_id(task.id)).to_dict()},
+    )
+    request_refresh(task.repo_key)  # a slot is free: start the next queued task
+    return task.id
 
 
 class CoordinationEventSink:

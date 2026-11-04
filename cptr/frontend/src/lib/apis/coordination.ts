@@ -71,6 +71,8 @@ export interface CoordTask {
 		status_reason?: string;
 		start?: { prompt: string };
 		start_prompt?: string;
+		/** Set when the agent's turn ended and it is waiting for the user. */
+		waiting_for_user?: number;
 		[k: string]: unknown;
 	};
 	created_at: number;
@@ -135,9 +137,24 @@ export interface TaskListResponse {
 	active_chats: string[];
 	tasks: CoordTask[];
 	dependencies: { task_id: string; depends_on: string }[];
+	limits?: { max_writers: number; max_readers: number };
 }
 
 const q = (root: string) => `root=${encodeURIComponent(root)}`;
+
+export interface CoordLimits {
+	max_writers: number;
+	max_readers: number;
+}
+
+export const getCoordLimits = () => fetchJSON<CoordLimits>('/api/coordination/limits');
+
+export const setCoordLimits = (maxWriters: number) =>
+	fetchJSON<CoordLimits>('/api/coordination/limits', {
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ max_writers: maxWriters })
+	});
 
 export const getCoordTasks = (root: string) =>
 	fetchJSON<TaskListResponse>(`/api/coordination/tasks?${q(root)}`);

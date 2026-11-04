@@ -109,7 +109,9 @@ class DetectionTests(Phase2TestCase):
         self.assertEqual(found["lockfile"].evidence["files"], ["uv.lock"])
         self.assertEqual(found["shared_config"].evidence["files"], [".github/workflows/ci.yml"])
         self.assertEqual(found["migration_heads"].level, "potential")
-        self.assertNotIn("file_overlap", found, found.get("file_overlap") and found["file_overlap"].evidence)
+        self.assertNotIn(
+            "file_overlap", found, found.get("file_overlap") and found["file_overlap"].evidence
+        )
 
     async def test_public_interface_change_used_by_other_task(self):
         git(self.repo, "switch", "-q", "main")
@@ -136,7 +138,9 @@ class DetectionTests(Phase2TestCase):
         await coordinator.refresh(a["repo_key"])
         row = (await self.conflicts_by_kind(a["repo_key"]))["dependency_version"]
         pkg = row.evidence["packages"][0]
-        self.assertEqual((pkg["package"], pkg[a["id"]], pkg[b["id"]]), ("left-pad", "^1.0.0", "^2.0.0"))
+        self.assertEqual(
+            (pkg["package"], pkg[a["id"]], pkg[b["id"]]), ("left-pad", "^1.0.0", "^2.0.0")
+        )
 
     async def test_base_branch_divergence_is_confirmed(self):
         a = await self.task("Feature on shared")
@@ -204,7 +208,8 @@ class EffectTests(Phase2TestCase):
         self.assertEqual(blocked.meta["status_before_block"], "running")
         levels = {
             frozenset({r.task_a, r.task_b}): r.level
-            for r in await CoordConflict.query(a["repo_key"]) if r.kind == "merge_conflict"
+            for r in await CoordConflict.query(a["repo_key"])
+            if r.kind == "merge_conflict"
         }
         self.assertEqual(levels[frozenset({a["id"], b["id"]})], "blocking")
         self.assertEqual(levels[frozenset({a["id"], c["id"]})], "confirmed")
@@ -263,8 +268,10 @@ class MessageTests(Phase2TestCase):
         c = await self.task("Docs only", files=["README.md"])
         d = await self.task("Depends on API work", depends_on=[a["id"]])
         rows = await messages.post(
-            from_task=a["id"], kind="interface_change",
-            body="I am changing the detection API.", files=["api.py"],
+            from_task=a["id"],
+            kind="interface_change",
+            body="I am changing the detection API.",
+            files=["api.py"],
         )
         self.assertEqual(sorted(r["to_task"] for r in rows), sorted([b["id"], d["id"]]))
         self.assertNotIn(c["id"], [r["to_task"] for r in rows])
@@ -274,7 +281,9 @@ class MessageTests(Phase2TestCase):
         a = await self.task("Receiver", chat_id=chat.id)
         b = await self.task("Sender")
         for _ in range(3):
-            await messages.post(from_task=b["id"], to_task=a["id"], kind="ready", body="Schema ready.")
+            await messages.post(
+                from_task=b["id"], to_task=a["id"], kind="ready", body="Schema ready."
+            )
         for i in range(12):
             await messages.post(from_task=b["id"], to_task=a["id"], kind="note", body=f"n{i}")
         meta = (await Chat.get_by_id(chat.id)).meta
@@ -290,8 +299,9 @@ class MessageTests(Phase2TestCase):
     async def test_concurrent_deliveries_never_duplicate(self):
         chat = await Chat.create(USER, "agent", meta={})
         a = await self.task("Racer", chat_id=chat.id)
-        await messages.post(from_task=None, repo_key=a["repo_key"], to_task=a["id"],
-                            kind="note", body="only once")
+        await messages.post(
+            from_task=None, repo_key=a["repo_key"], to_task=a["id"], kind="note", body="only once"
+        )
         blocks = await asyncio.gather(*(messages.take_delivery(a["id"]) for _ in range(6)))
         self.assertEqual(sum("only once" in b for b in blocks), 1)
 
@@ -346,20 +356,57 @@ class SchedulerTests(Phase2TestCase):
         self.assertEqual((started.status, started.blockers), ("running", []))
         self.assertNotIn("start", started.meta)
 
-    async def test_writer_limit_defaults_to_two(self):
-        tasks = [await self._chat_task(f"Parallel {i}") for i in range(3)]
+    async def test_writer_limit_defaults_to_four(self):
+        tasks = [await self._chat_task(f"Parallel {i}") for i in range(5)]
         await coordinator.refresh(tasks[0]["repo_key"])
-        self.assertEqual(len(self.launched), 2)
+        self.assertEqual(len(self.launched), 4)
         statuses = sorted([(await CoordTask.get_by_id(t["id"])).status for t in tasks])
-        self.assertEqual(statuses, ["queued", "running", "running"])
+        self.assertEqual(statuses, ["queued", "running", "running", "running", "running"])
 
     async def test_slot_frees_when_a_writer_stops_running(self):
-        tasks = [await self._chat_task(f"Slot {i}") for i in range(3)]
+        tasks = [await self._chat_task(f"Slot {i}") for i in range(5)]
         await coordinator.refresh(tasks[0]["repo_key"])
-        self.assertEqual(len(self.launched), 2)
+        self.assertEqual(len(self.launched), 4)
         await registry.set_status(self.launched[0][0], "paused")
         await coordinator.refresh(tasks[0]["repo_key"])
-        self.assertEqual(len(self.launched), 3)
+        self.assertEqual(len(self.launched), 5)
+
+    async def test_idle_agent_waits_for_user_and_frees_its_slot(self):
+        tasks = [await self._chat_task(f"Idle {i}") for i in range(5)]
+        await coordinator.refresh(tasks[0]["repo_key"])
+        self.assertEqual(len(self.launched), 4)
+        first = await CoordTask.get_by_id(self.launched[0][0])
+        # Its turn ended and nothing else is running in its chat.
+        self.assertEqual(await coordinator.on_turn_end(first.chat_id, grace=0), first.id)
+        waiting = await CoordTask.get_by_id(first.id)
+        self.assertEqual(waiting.status, "queued")
+        self.assertIn("waiting_for_user", waiting.meta)
+        await coordinator.refresh(tasks[0]["repo_key"])
+        self.assertEqual(len(self.launched), 5)  # the freed slot went to the 5th task
+        # The user's next message continues it.
+        chat = await Chat.get_by_id(first.chat_id)
+        await coordinator.on_turn_start(first.chat_id, chat.meta)
+        resumed = await CoordTask.get_by_id(first.id)
+        self.assertEqual(resumed.status, "running")
+        self.assertNotIn("waiting_for_user", resumed.meta)
+        self.assertEqual(len(self.launched), 5)  # never relaunched by the scheduler
+
+    async def test_agent_still_working_is_not_marked_waiting(self):
+        from unittest import mock
+
+        a = await self._chat_task("Busy")
+        await coordinator.refresh(a["repo_key"])
+        chat_id = (await CoordTask.get_by_id(a["id"])).chat_id
+        with mock.patch("cptr.utils.chat_task.get_active_chat_ids", return_value={chat_id}):
+            self.assertIsNone(await coordinator.on_turn_end(chat_id, grace=0))
+        self.assertEqual((await CoordTask.get_by_id(a["id"])).status, "running")
+
+    async def test_subagent_turn_end_resolves_to_parent_task(self):
+        a = await self._chat_task("Parent")
+        await coordinator.refresh(a["repo_key"])
+        parent = (await CoordTask.get_by_id(a["id"])).chat_id
+        child = await Chat.create(USER, "explorer", meta={"parent_chat_id": parent})
+        self.assertEqual(await coordinator.on_turn_end(child.id, grace=0), a["id"])
 
     async def test_restart_does_not_relaunch(self):
         a = await self._chat_task("Once")
@@ -384,8 +431,9 @@ class SchedulerTests(Phase2TestCase):
 
     def test_find_cycle(self):
         self.assertIsNone(scheduler.find_cycle([("b", "a")], ("c", "b")))
-        self.assertEqual(scheduler.find_cycle([("b", "a"), ("c", "b")], ("a", "c")),
-                         ["a", "c", "b", "a"])
+        self.assertEqual(
+            scheduler.find_cycle([("b", "a"), ("c", "b")], ("a", "c")), ["a", "c", "b", "a"]
+        )
 
     async def test_user_driven_tasks_are_not_autostarted(self):
         a = await self.task("Manual")
@@ -433,8 +481,15 @@ class TriggerAndToolTests(Phase2TestCase):
         status = json.loads(await coordinate("status", __context__=ctx))
         self.assertEqual(status["task"]["id"], a["id"])
         self.assertEqual([t["id"] for t in status["other_tasks"]], [b["id"]])
-        sent = json.loads(await coordinate("message", kind="interface_change", message="API v2",
-                                           files=["api.py"], __context__=ctx))
+        sent = json.loads(
+            await coordinate(
+                "message",
+                kind="interface_change",
+                message="API v2",
+                files=["api.py"],
+                __context__=ctx,
+            )
+        )
         self.assertEqual(sent["delivered_to"], [b["id"]])
         await registry.set_status(a["id"], "running")
         ready = json.loads(await coordinate("ready", __context__=ctx))
