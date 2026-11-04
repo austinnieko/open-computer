@@ -147,6 +147,11 @@ async def schedule(repo_key: str) -> list[str]:
             if not await CoordTask.update_fields(task.id, expect_status="queued", status="running"):
                 continue  # someone else moved it
             try:
+                if deps.get(task.id):
+                    from cptr.utils.coordination import lifecycle
+
+                    # Bring in the finished dependencies' work before the agent starts.
+                    await lifecycle.ensure_dependency_merges(task)
                 await _launch(task, start)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[coord] failed to start %s: %s", task.id, exc)

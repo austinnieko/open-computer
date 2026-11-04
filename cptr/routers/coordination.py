@@ -73,6 +73,16 @@ class RegisterTaskRequest(BaseModel):
     test_command: str | None = None
     targeted_test_command: str | None = None
     create_chat: bool = False
+    # False keeps a task with instructions as a Draft until the user clicks Start.
+    start_now: bool = True
+
+
+class StartTaskRequest(BaseModel):
+    prompt: str | None = None
+    model_id: str | None = None
+
+
+DEFAULT_START_PROMPT = "Start working on this task."
 
 
 class BindChatRequest(BaseModel):
@@ -335,6 +345,39 @@ async def delete_task(request: Request, task_id: str, body: DeleteTaskRequest):
     return {"ok": True, "branch_kept": task.branch, "worktree_removed": removed_worktree}
 
 
+@router.post("/tasks/{task_id}/start")
+async def start_task_route(request: Request, task_id: str, body: StartTaskRequest):
+    """Start a Draft task: it gets in line and runs when a slot is free.
+
+    Uses ``body.prompt``, else the instructions saved with the task, else a plain
+    "start working" prompt. Typing in the task's chat starts it too.
+    """
+    task = await _own_task(request, task_id)
+    if not task.chat_id:
+        raise HTTPException(409, "task has no agent chat")
+    meta = dict(task.meta or {})
+    if task.status != "queued" or meta.get("start"):
+        raise HTTPException(409, f"task is {task.status}; only a draft can be started")
+    draft = meta.get("draft_start") or {}
+    chat = await Chat.get_by_id(task.chat_id)
+    model_id = (
+        body.model_id
+        or draft.get("model_id")
+        or ((chat.meta or {}) if chat else {}).get("last_model")
+    )
+    if not model_id:
+        raise HTTPException(409, "Choose a model for this task's chat first")
+    prompt = (body.prompt or draft.get("prompt") or DEFAULT_START_PROMPT).strip()
+    meta.pop("draft_start", None)
+    meta.pop("waiting_for_user", None)
+    meta["start"] = {"prompt": prompt, "model_id": model_id}
+    await CoordTask.update_fields(task.id, expect_status="queued", meta=meta)
+    coordinator.request_refresh(task.repo_key)
+    result = (await CoordTask.get_by_id(task.id)).to_dict()
+    await _emit(task.user_id, result)
+    return result
+
+
 @router.post("/tasks/{task_id}/resume")
 async def resume_task(request: Request, task_id: str):
     """Queue the task again. With an agent chat, the scheduler continues it when a
@@ -349,11 +392,14 @@ async def resume_task(request: Request, task_id: str):
     current = await CoordTask.get_by_id(task.id)
     if current.chat_id:
         meta = dict(current.meta or {})
-        meta["start"] = {
-            "prompt": "Continue this task from where you left off. Check `git status` and "
-            "`git log` in this worktree first; do not redo work that is already committed.",
-            "model_id": None,
-        }
+        prompt = (
+            "Continue this task from where you left off. Check `git status` and "
+            "`git log` in this worktree first; do not redo work that is already committed."
+        )
+        note = ((meta.get("checkout") or {}).get("note") or "").strip()
+        if note:
+            prompt += f"\n\nThe last check-out on this task said: {note}"
+        meta["start"] = {"prompt": prompt, "model_id": None}
         await CoordTask.update_fields(task.id, meta=meta)
     coordinator.request_refresh(task.repo_key)
     result = (await CoordTask.get_by_id(task.id)).to_dict()
@@ -414,6 +460,12 @@ async def register(request: Request, body: RegisterTaskRequest):
         )
     except (registry.CoordinationError, wt.WorktreeError) as exc:
         raise HTTPException(409, str(exc)) from exc
+    if not body.start_now and (result["task"].get("meta") or {}).get("start"):
+        # Keep it a Draft: save the instructions for when the user clicks Start.
+        meta = dict(result["task"]["meta"])
+        meta["draft_start"] = meta.pop("start")
+        await CoordTask.update_fields(result["task"]["id"], meta=meta)
+        result["task"] = (await CoordTask.get_by_id(result["task"]["id"])).to_dict()
     await _emit(user_id, result["task"])
     coordinator.request_refresh(result["task"]["repo_key"])
     return result

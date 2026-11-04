@@ -247,3 +247,155 @@ export function compactDuration(ms: number): string {
 	if (m < 60) return `${m}m`;
 	return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
+
+// ── Lifecycle ───────────────────────────────────────────────
+// One reading of a task, used by the dashboard and the sidebar:
+//   stage    - where the task is in its life (Draft → Active → Review → Done)
+//   activity - what is happening right now, while it is Active
+//   action   - the one thing to do next (the main button)
+// It is derived from the stored status, blockers and meta (see the server's
+// cptr/utils/coordination/lifecycle.py for how those are set).
+
+export type TaskStage = 'draft' | 'active' | 'review' | 'done' | 'ended';
+export type TaskActivity = 'working' | 'in_line' | 'needs_you' | 'blocked' | 'stopped' | null;
+export type TaskAction =
+	| 'start'
+	| 'stop'
+	| 'reply'
+	| 'review'
+	| 'integrate'
+	| 'resume'
+	| 'retry'
+	| 'delete'
+	| null;
+
+export interface TaskLifecycle {
+	stage: TaskStage;
+	activity: TaskActivity;
+	/** i18n key under coordination.detail.*, or null. */
+	detailKey: string | null;
+	detailArgs?: Record<string, string | number>;
+	/** Free text from the agent or the server (its question, reason or error). */
+	detailText?: string;
+	action: TaskAction;
+}
+
+export interface TaskCheckout {
+	kind: 'done' | 'needs-input' | 'blocked' | 'continuing' | 'none';
+	note?: string;
+	at?: number;
+	stalled?: boolean;
+}
+
+export function checkoutOf(task: CoordTask): TaskCheckout | null {
+	const checkout = task.meta?.checkout as TaskCheckout | undefined;
+	return checkout && typeof checkout === 'object' ? checkout : null;
+}
+
+export function lifecycleOf(
+	task: CoordTask,
+	ctx: { titles: Map<string, string>; runningWriters: number; maxWriters: number }
+): TaskLifecycle {
+	const blockers = task.blockers ?? [];
+	const names = (ids: string[] = []) => ids.map((id) => ctx.titles.get(id) ?? id).join(', ');
+	if (task.status === 'completed')
+		return { stage: 'done', activity: null, detailKey: null, action: null };
+	if (task.status === 'ended')
+		return { stage: 'ended', activity: null, detailKey: null, action: null };
+	if (task.chat_missing) {
+		return { stage: 'active', activity: 'needs_you', detailKey: 'chatGone', action: 'delete' };
+	}
+	if (task.status === 'reviewing') {
+		return { stage: 'review', activity: null, detailKey: 'review', action: 'review' };
+	}
+	if (task.status === 'integration_ready') {
+		return { stage: 'review', activity: null, detailKey: 'passedIntegration', action: 'integrate' };
+	}
+	if (task.status === 'failed') {
+		const error = String(task.meta?.error ?? task.meta?.status_reason ?? '');
+		return {
+			stage: 'active',
+			activity: 'needs_you',
+			detailKey: 'failed',
+			detailText: error || undefined,
+			action: 'retry'
+		};
+	}
+	if (task.status === 'paused') {
+		return { stage: 'active', activity: 'stopped', detailKey: 'stopped', action: 'resume' };
+	}
+	if (task.status === 'running') {
+		return { stage: 'active', activity: 'working', detailKey: null, action: 'stop' };
+	}
+	const failedDep = blockers.find((b) => b.kind === 'dependency_failed');
+	if (failedDep) {
+		return {
+			stage: 'active',
+			activity: 'needs_you',
+			detailKey: 'dependencyGone',
+			detailArgs: { tasks: names(failedDep.tasks) || failedDep.detail || '' },
+			action: null
+		};
+	}
+	const waitingOn = blockers.find((b) => b.kind === 'waiting_on');
+	const started = !!task.meta?.milestones?.started || !!task.meta?.waiting_for_user;
+	const inLine = !!task.meta?.start;
+	if (task.status === 'blocked' || waitingOn) {
+		const other = blockers.filter((b) => b.kind !== 'waiting_on');
+		return {
+			stage: started || inLine || task.status === 'blocked' ? 'active' : 'draft',
+			activity: started || inLine || task.status === 'blocked' ? 'blocked' : null,
+			detailKey: waitingOn ? 'waitingOn' : 'blocked',
+			detailArgs: waitingOn ? { tasks: names(waitingOn.tasks) || waitingOn.detail || '' } : {},
+			detailText: waitingOn
+				? undefined
+				: other.map((b) => b.detail || b.kind).join('; ') || undefined,
+			action: started || inLine ? 'stop' : 'start'
+		};
+	}
+	// status === 'queued'
+	if (task.meta?.waiting_for_user) {
+		const checkout = checkoutOf(task);
+		const kind = checkout?.stalled ? 'stalled' : (checkout?.kind ?? 'none');
+		const key =
+			kind === 'needs-input'
+				? 'question'
+				: kind === 'blocked'
+					? 'agentBlocked'
+					: kind === 'stalled'
+						? 'stalled'
+						: 'noReport';
+		return {
+			stage: 'active',
+			activity: 'needs_you',
+			detailKey: key,
+			detailText: checkout?.note || undefined,
+			action: 'reply'
+		};
+	}
+	if (inLine) {
+		return {
+			stage: 'active',
+			activity: 'in_line',
+			detailKey: 'inLine',
+			detailArgs: { running: ctx.runningWriters, max: ctx.maxWriters },
+			action: 'stop'
+		};
+	}
+	return { stage: 'draft', activity: null, detailKey: 'draft', action: 'start' };
+}
+
+/** Sidebar badge tone for a task's lifecycle. */
+export function lifecycleTone(life: TaskLifecycle): string {
+	if (life.stage === 'review') return 'review';
+	if (life.stage === 'done' || life.stage === 'ended') return 'done';
+	if (life.stage === 'draft' || !life.activity) return 'neutral';
+	const tones: Record<NonNullable<TaskActivity>, string> = {
+		working: 'running',
+		in_line: 'waiting',
+		needs_you: 'attention',
+		blocked: 'failed',
+		stopped: 'neutral'
+	};
+	return tones[life.activity];
+}

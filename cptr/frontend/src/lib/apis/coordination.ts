@@ -200,7 +200,12 @@ export interface RegisterTaskBody {
 	start_prompt?: string;
 	model_id?: string;
 	test_command?: string;
+	/** False keeps a task with instructions as a Draft until Start is clicked. */
+	start_now?: boolean;
 }
+
+export const startCoordTask = (id: string, body: { prompt?: string; model_id?: string } = {}) =>
+	fetchJSON<CoordTask>(`/api/coordination/tasks/${id}/start`, jsonBody(body));
 
 export const registerCoordTask = (body: RegisterTaskBody) =>
 	fetchJSON<{ task: CoordTask; reused: boolean; worktree: { error?: string } | null }>(

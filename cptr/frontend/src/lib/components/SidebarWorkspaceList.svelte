@@ -28,7 +28,8 @@
 	import { describeActivity, subagentsOf, trackSubagents } from '$lib/stores/subagents.svelte';
 	import {
 		coordinationOf,
-		displayStatus,
+		lifecycleOf,
+		lifecycleTone,
 		trackCoordination
 	} from '$lib/stores/coordination.svelte';
 	import DropdownMenu from './DropdownMenu.svelte';
@@ -121,28 +122,24 @@
 		}
 		return map;
 	});
-	const TASK_TONE: Record<string, string> = {
-		running: 'running',
-		queued: 'waiting',
-		awaiting_input: 'waiting',
-		waiting_slot: 'waiting',
-		waiting_for_user: 'waiting',
-		blocked: 'attention',
-		paused: 'attention',
-		reviewing: 'review',
-		integration_ready: 'review',
-		failed: 'failed',
-		completed: 'done',
-		ended: 'done'
-	};
+
 	function badgeFor(chat: ChatInfo): { letter: string; tone: string; label: string } | undefined {
 		if (isDraftId(chat.id)) return undefined;
 		const taskId = (chat.meta as Record<string, unknown> | null)?.coord_task_id;
 		const task = taskByChat.get(chat.id);
 		if (task || taskId) {
-			const status = task ? displayStatus(task) : '';
-			const label = status ? `Task agent · ${$t(`coordination.status.${status}`)}` : 'Task agent';
-			return { letter: 'A', tone: TASK_TONE[status] ?? 'neutral', label };
+			if (!task || !currentPath) return { letter: 'A', tone: 'neutral', label: 'Task agent' };
+			const state = coordinationOf(currentPath);
+			const life = lifecycleOf(task, {
+				titles: new Map(state.tasks.map((t) => [t.id, t.title])),
+				runningWriters: state.tasks.filter((t) => t.status === 'running' && t.worktree_path).length,
+				maxWriters: state.maxWriters
+			});
+			const name =
+				life.stage === 'active' && life.activity
+					? $t(`coordination.activity.${life.activity}`)
+					: $t(`coordination.stage.${life.stage}`);
+			return { letter: 'A', tone: lifecycleTone(life), label: `Task agent · ${name}` };
 		}
 		const active = $chatStatuses.get(chat.id)?.active ?? chat.is_active ?? false;
 		return active

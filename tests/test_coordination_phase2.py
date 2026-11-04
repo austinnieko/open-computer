@@ -293,7 +293,9 @@ class MessageTests(Phase2TestCase):
         self.assertEqual(first.count("[note]"), messages.MAX_PER_DELIVERY - 1)
         second = await coordinator.on_turn_start(chat.id, meta)
         self.assertEqual(second.count("[note]"), 12 - (messages.MAX_PER_DELIVERY - 1))
-        self.assertEqual(await coordinator.on_turn_start(chat.id, meta), "")
+        third = await coordinator.on_turn_start(chat.id, meta)
+        self.assertNotIn("[note]", third)  # nothing left to deliver
+        self.assertIn("CHECKOUT: done", third)  # every turn asks for a check-out
         self.assertEqual((await CoordTask.get_by_id(a["id"])).status, "running")
 
     async def test_concurrent_deliveries_never_duplicate(self):
