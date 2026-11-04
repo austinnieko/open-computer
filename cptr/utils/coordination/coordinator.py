@@ -171,6 +171,8 @@ async def apply_effects(
         observed = sorted(cs.files)
         if (task.meta or {}).get("observed_files") != observed:
             current = await CoordTask.get_by_id(task_id)
+            if current is None:  # deleted while this refresh ran
+                continue
             await CoordTask.update_fields(
                 task_id, meta={**(current.meta or {}), "observed_files": observed}
             )

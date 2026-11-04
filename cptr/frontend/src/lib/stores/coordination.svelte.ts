@@ -209,6 +209,7 @@ export function levelRank(level: string): number {
  * when the user sends a message in its chat, so show that instead of "Queued".
  */
 export function displayStatus(task: CoordTask): string {
+	if (task.chat_missing && !['completed', 'ended'].includes(task.status)) return 'chat_deleted';
 	if (
 		task.status === 'queued' &&
 		task.chat_id &&

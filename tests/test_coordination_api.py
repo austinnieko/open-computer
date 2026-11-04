@@ -216,6 +216,39 @@ class ChatFileTests(ApiTestCase):
         self.assertEqual(self._chat_file(kept["chat_id"]).read_text(), '{"id": "real"}')
 
 
+class DeleteTaskChatTests(ApiTestCase):
+    """Deleting a task's agent chat removes the task; its branch and folder stay."""
+
+    async def _task(self, title: str) -> dict:
+        body = {"root": str(self.repo), "title": title, "create_chat": True, "model_id": "m"}
+        return (await self.post("/tasks", body)).json()["task"]
+
+    async def test_deleting_task_chat_removes_task_keeps_branch_and_folder(self):
+        task = await self._task("Chat goes")
+        response = await self.client.delete(f"/api/chats/{task['chat_id']}")
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(await CoordTask.get_by_id(task["id"]))
+        self.assertTrue(Path(task["worktree_path"]).is_dir())
+        self.assertIn(task["branch"], git(self.repo, "branch", "--list", task["branch"]))
+
+    async def test_task_with_missing_chat_is_flagged_and_deletable_unended(self):
+        task = await self._task("Orphan")
+        await Chat.delete(task["chat_id"])  # as before chat deletion removed tasks
+        listed = (await self.client.get(f"/api/coordination/tasks?root={self.repo}")).json()
+        row = next(t for t in listed["tasks"] if t["id"] == task["id"])
+        self.assertTrue(row["chat_missing"])
+        self.assertNotIn("ended", row["status"])
+        chat_file = self.repo / ".cptr" / "chats" / f"{task['chat_id']}.json"
+        chat_file.unlink(missing_ok=True)
+        await self.client.get(f"/api/coordination/tasks?root={self.repo}")
+        self.assertFalse(chat_file.exists())  # no backfill for a deleted chat
+        response = await self.client.request(
+            "DELETE", f"/api/coordination/tasks/{task['id']}", json={"confirm": True}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(await CoordTask.get_by_id(task["id"]))
+
+
 class UsageTests(ApiTestCase):
     async def test_usage_sums_task_chats_and_totals(self):
         from cptr.models.chats import ChatMessage

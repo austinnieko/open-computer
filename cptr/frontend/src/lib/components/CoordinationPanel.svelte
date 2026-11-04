@@ -143,7 +143,8 @@
 			'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
 		completed: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400',
 		failed: 'bg-red-100 text-red-800 dark:bg-red-500/25 dark:text-red-200',
-		ended: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400'
+		ended: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400',
+		chat_deleted: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400'
 	};
 	const LEVEL_CLASS: Record<string, string> = {
 		info: 'text-gray-500 dark:text-gray-400',
@@ -695,7 +696,7 @@
 									<Icon name="stop" size={13} />{$t('coordination.pause')}
 								</button>
 							{/if}
-							{#if !['completed', 'ended'].includes(task.status)}
+							{#if !['completed', 'ended'].includes(task.status) && !task.chat_missing}
 								<button
 									class="btn-secondary"
 									disabled={busy === `end:${task.id}`}
@@ -1106,7 +1107,7 @@
 								>
 							</section>
 						{/if}
-						{#if ['completed', 'failed', 'ended'].includes(task.status)}
+						{#if ['completed', 'failed', 'ended'].includes(task.status) || task.chat_missing}
 							<section class="border-t border-gray-100 pt-3 dark:border-white/6">
 								<button
 									class="link text-xs text-red-600 dark:text-red-400"

@@ -1192,6 +1192,11 @@ async def delete_chat(request: Request, chat_id: str):
         else:
             await asyncio.to_thread(child_file.unlink, True)
 
+    # A task's agent chat: the task goes with it (branch and folder are kept).
+    from cptr.routers.coordination import forget_task_of_deleted_chat
+
+    await forget_task_of_deleted_chat(chat_id, user_id)
+
     await Chat.delete(chat_id)
     from cptr.socket.main import emit_to_user
     from cptr.utils.chat_task import get_active_chat_ids
