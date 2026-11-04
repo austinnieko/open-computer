@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 📂 **Resumed agent sessions stay in the right folder.** Resuming a coding-agent session no longer reopens a session that was started in a different folder.
 - 📂 **External OpenCode 1.x servers use the chat's folder.** They now receive the chat's directory instead of running in their own startup folder.
+- 🔑 **GitHub sign-in works with older GitHub CLI versions.** The GitHub settings no longer show "unknown flag: --json" with gh releases that lack it, such as the 2.45 package in Ubuntu; your signed-in accounts now show up.
+- 💬 **Tasks waiting for you say so.** A task with no start prompt now shows "Ready – send a message" instead of "Queued", since it starts when you send the first message in its chat.
 
 ## [0.9.30] - 2026-11-04
 

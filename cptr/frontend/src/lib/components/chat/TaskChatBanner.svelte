@@ -9,7 +9,7 @@
 	import Icon from '../Icon.svelte';
 	import { getCoordTask, type CoordTask } from '$lib/apis/coordination';
 	import { socketStore } from '$lib/stores/socket.svelte';
-	import { coordinationFocus } from '$lib/stores/coordination.svelte';
+	import { coordinationFocus, displayStatus } from '$lib/stores/coordination.svelte';
 	import { openCoordinationTab } from '$lib/stores';
 
 	interface Props {
@@ -21,6 +21,7 @@
 
 	const STATUS_CLASS: Record<string, string> = {
 		queued: 'bg-gray-100 text-gray-600 dark:bg-white/8 dark:text-gray-300',
+		awaiting_input: 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
 		running: 'bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300',
 		blocked: 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300',
 		paused: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
@@ -88,9 +89,11 @@
 			<span class="min-w-0 truncate text-gray-500">{$t('coordination.readOnly')}</span>
 		{/if}
 		<span
-			class="shrink-0 rounded-full px-1.5 text-[0.625rem] font-medium {STATUS_CLASS[task.status]}"
+			class="shrink-0 rounded-full px-1.5 text-[0.625rem] font-medium {STATUS_CLASS[
+				displayStatus(task)
+			]}"
 		>
-			{$t(`coordination.status.${task.status}`)}
+			{$t(`coordination.status.${displayStatus(task)}`)}
 		</span>
 	</button>
 {/if}
