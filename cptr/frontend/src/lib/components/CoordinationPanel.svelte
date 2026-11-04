@@ -16,6 +16,7 @@
 	import DiffHunkList from './DiffHunkList.svelte';
 	import { addWorkspace, openChatTab } from '$lib/stores';
 	import { requestConfirm } from '$lib/stores/confirm';
+	import { chatModels, defaultModel } from '$lib/stores/chat';
 	import {
 		addCoordDependency,
 		deleteCoordTask,
@@ -316,13 +317,24 @@
 	}
 
 	// ── New task form ────────────────────────────────
+	// Same rule as a new chat: the configured default model, else the first one.
+	function initialModel(): string | null {
+		return $defaultModel || $chatModels[0]?.id || null;
+	}
+
 	let form = $state({
 		title: '',
 		description: '',
 		startPrompt: '',
 		testCommand: '',
 		dependsOn: [] as string[],
-		model: null as string | null
+		model: initialModel()
+	});
+
+	// The model list can load after this panel mounts; fill the picker once it
+	// arrives unless the user already picked something.
+	$effect(() => {
+		if (!form.model) form.model = initialModel();
 	});
 
 	function resetForm() {
@@ -332,7 +344,7 @@
 			startPrompt: '',
 			testCommand: '',
 			dependsOn: [],
-			model: null
+			model: initialModel()
 		};
 	}
 
