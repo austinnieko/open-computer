@@ -37,12 +37,28 @@
 		const value = Math.min(16, Math.max(1, Math.round(Number(maxWriters) || 1)));
 		savingLimit = true;
 		try {
-			maxWriters = (await setCoordLimits(value)).max_writers;
+			maxWriters = (await setCoordLimits({ max_writers: value })).max_writers;
 			toast.success($t('settings.saved'));
 		} catch {
 			toast.error($t('admin.failedToSave'));
 		} finally {
 			savingLimit = false;
+		}
+	}
+
+	// How often an agent that is waiting on its own background work is checked on.
+	let checkinMinutes = $state<number | null>(null);
+	let savingCheckin = $state(false);
+	async function saveCheckin() {
+		const value = Math.min(240, Math.max(0, Math.round(Number(checkinMinutes) || 0)));
+		savingCheckin = true;
+		try {
+			checkinMinutes = (await setCoordLimits({ checkin_minutes: value })).checkin_minutes;
+			toast.success($t('settings.saved'));
+		} catch {
+			toast.error($t('admin.failedToSave'));
+		} finally {
+			savingCheckin = false;
 		}
 	}
 
@@ -243,7 +259,10 @@
 
 	onMount(async () => {
 		getCoordLimits()
-			.then((limits) => (maxWriters = limits.max_writers))
+			.then((limits) => {
+				maxWriters = limits.max_writers;
+				checkinMinutes = limits.checkin_minutes ?? 10;
+			})
 			.catch(() => {});
 		try {
 			applyResponse(await getAgents());
@@ -309,6 +328,30 @@
 				<p class="mt-1 text-[0.6875rem] text-gray-400 dark:text-gray-600">
 					{$t('admin.taskAgentsAtOnceHint')}
 				</p>
+				{#if checkinMinutes !== null}
+					<div class="mt-3 flex items-center justify-between gap-3">
+						<label for="checkin-minutes" class="min-w-0 text-xs text-gray-600 dark:text-gray-400">
+							{$t('admin.taskCheckinMinutes')}
+						</label>
+						<div class="flex shrink-0 items-center gap-1.5">
+							<input
+								id="checkin-minutes"
+								type="number"
+								min="0"
+								max="240"
+								bind:value={checkinMinutes}
+								onchange={saveCheckin}
+								disabled={savingCheckin}
+								class="w-16 h-7 px-2 rounded-lg text-xs bg-gray-100 dark:bg-white/6 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/8 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
+							/>
+							<span class="text-[0.6875rem] text-gray-400">{$t('admin.minutesShort')}</span>
+							{#if savingCheckin}<Spinner size={12} />{/if}
+						</div>
+					</div>
+					<p class="mt-1 text-[0.6875rem] text-gray-400 dark:text-gray-600">
+						{$t('admin.taskCheckinMinutesHint')}
+					</p>
+				{/if}
 			</div>
 		{/if}
 		<div class="divide-y divide-gray-100 dark:divide-white/5">

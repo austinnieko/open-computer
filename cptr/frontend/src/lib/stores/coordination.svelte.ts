@@ -29,6 +29,8 @@ export interface CoordState {
 	error: string;
 	notRepo: boolean;
 	repoRoot: string;
+	/** The folder this dashboard was opened from (resolved by the server). */
+	viewRoot: string;
 	tasks: CoordTask[];
 	dependencies: { task_id: string; depends_on: string }[];
 	conflicts: CoordConflict[];
@@ -60,6 +62,7 @@ function empty(): CoordState {
 		error: '',
 		notRepo: false,
 		repoRoot: '',
+		viewRoot: '',
 		maxWriters: 2,
 		tasks: [],
 		dependencies: [],
@@ -129,6 +132,7 @@ export async function refresh(root: string): Promise<void> {
 		]);
 		if (seq !== entry.seq) return;
 		entry.state.repoRoot = tasks.repo_root;
+		entry.state.viewRoot = tasks.root ?? root;
 		entry.state.tasks = tasks.tasks;
 		if (tasks.limits) entry.state.maxWriters = tasks.limits.max_writers;
 		entry.state.dependencies = tasks.dependencies;
@@ -257,7 +261,14 @@ export function compactDuration(ms: number): string {
 // cptr/utils/coordination/lifecycle.py for how those are set).
 
 export type TaskStage = 'draft' | 'active' | 'review' | 'done' | 'ended';
-export type TaskActivity = 'working' | 'in_line' | 'needs_you' | 'blocked' | 'stopped' | null;
+export type TaskActivity =
+	| 'working'
+	| 'in_line'
+	| 'background'
+	| 'needs_you'
+	| 'blocked'
+	| 'stopped'
+	| null;
 export type TaskAction =
 	| 'start'
 	| 'stop'
@@ -367,7 +378,9 @@ export function lifecycleOf(
 						: 'noReport';
 		return {
 			stage: 'active',
-			activity: 'needs_you',
+			// "continuing" with nothing visible running: the agent's own background
+			// work (e.g. an OpenCode sub-agent) is invisible here, so don't alarm.
+			activity: kind === 'stalled' ? 'background' : 'needs_you',
 			detailKey: key,
 			detailText: checkout?.note || undefined,
 			action: 'reply'
@@ -393,6 +406,7 @@ export function lifecycleTone(life: TaskLifecycle): string {
 	const tones: Record<NonNullable<TaskActivity>, string> = {
 		working: 'running',
 		in_line: 'waiting',
+		background: 'waiting',
 		needs_you: 'attention',
 		blocked: 'failed',
 		stopped: 'neutral'

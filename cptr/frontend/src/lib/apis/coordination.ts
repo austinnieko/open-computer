@@ -43,6 +43,8 @@ export interface CoordTask {
 	id: string;
 	repo_key: string;
 	repo_root: string;
+	/** This folder, resolved; compare with each task's meta.origin_root. */
+	root?: string;
 	title: string;
 	description: string | null;
 	status: TaskStatus;
@@ -133,6 +135,8 @@ export interface CoordIntegration {
 
 export interface TaskListResponse {
 	repo_root: string;
+	/** This folder, resolved; compare with each task's meta.origin_root. */
+	root?: string;
 	repo_key: string;
 	active_chats: string[];
 	tasks: CoordTask[];
@@ -145,15 +149,17 @@ const q = (root: string) => `root=${encodeURIComponent(root)}`;
 export interface CoordLimits {
 	max_writers: number;
 	max_readers: number;
+	/** Minutes before an agent waiting on its own background work is checked on (0 = never). */
+	checkin_minutes: number;
 }
 
 export const getCoordLimits = () => fetchJSON<CoordLimits>('/api/coordination/limits');
 
-export const setCoordLimits = (maxWriters: number) =>
+export const setCoordLimits = (body: { max_writers?: number; checkin_minutes?: number }) =>
 	fetchJSON<CoordLimits>('/api/coordination/limits', {
 		method: 'PUT',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ max_writers: maxWriters })
+		body: JSON.stringify(body)
 	});
 
 export const getCoordTasks = (root: string) =>
@@ -240,6 +246,11 @@ export const sendCoordMessage = (id: string, body: string) =>
 	taskPost(id, 'messages', { kind: 'note', body });
 export const addCoordDependency = (id: string, dependsOn: string) =>
 	taskPost(id, 'dependencies', { depends_on: dependsOn });
+export const removeCoordDependency = (id: string, dependsOn: string) =>
+	fetchJSON<{ removed: boolean }>(
+		`/api/coordination/tasks/${encodeURIComponent(id)}/dependencies/${encodeURIComponent(dependsOn)}`,
+		{ method: 'DELETE' }
+	);
 
 export const getCoordTask = (id: string) =>
 	fetchJSON<{

@@ -304,3 +304,47 @@ class UsageTests(ApiTestCase):
         self.client.cookies.set("cptr_session", create_token("someone-else", "other", "user"))
         data = (await self.client.get(f"/api/coordination/usage?root={self.repo}")).json()
         self.assertEqual((data["tasks"], data["totals"]["tokens"]), ({}, 0))
+
+
+class OriginFolderTests(ApiTestCase):
+    """A task belongs to the folder it was started from, even in a shared repo."""
+
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        import os
+
+        self.side = Path(os.path.realpath(self.repo.parent / "side-folder"))
+        git(self.repo, "worktree", "add", "-q", "-b", "side", str(self.side))
+
+    def _file(self, folder: Path, chat_id: str) -> Path:
+        return folder / ".cptr" / "chats" / f"{chat_id}.json"
+
+    async def test_task_from_a_worktree_is_filed_under_that_worktree(self):
+        body = {"root": str(self.side), "title": "Side", "create_chat": True, "model_id": "m"}
+        task = (await self.post("/tasks", body)).json()["task"]
+        self.assertEqual(task["meta"]["origin_root"], str(self.side))
+        self.assertTrue(self._file(self.side, task["chat_id"]).exists())
+        self.assertFalse(self._file(self.repo, task["chat_id"]).exists())
+
+        listed = (await self.client.get(f"/api/coordination/tasks?root={self.repo}")).json()
+        self.assertEqual(listed["root"], str(self.repo))  # one shared list, origin per task
+        self.assertEqual([t["meta"]["origin_root"] for t in listed["tasks"]], [str(self.side)])
+
+    async def test_older_task_is_moved_to_the_folder_on_its_base_branch(self):
+        from cptr.routers import coordination as coord_router
+
+        body = {"root": str(self.repo), "title": "Old", "create_chat": True, "model_id": "m"}
+        task = (await self.post("/tasks", body)).json()["task"]
+        # As if created before origins were recorded, from the "side" worktree.
+        meta = {**task["meta"], "base_branch": "side"}
+        meta.pop("origin_root")
+        await CoordTask.update_fields(task["id"], meta=meta)
+        coord_router._chat_files_ok.clear()
+
+        await self.client.get(f"/api/coordination/tasks?root={self.repo}")
+        self.assertEqual(
+            (await CoordTask.get_by_id(task["id"])).meta["origin_root"], str(self.side)
+        )
+        self.assertEqual((await Chat.get_by_id(task["chat_id"])).meta["workspace"], str(self.side))
+        self.assertTrue(self._file(self.side, task["chat_id"]).exists())
+        self.assertFalse(self._file(self.repo, task["chat_id"]).exists())

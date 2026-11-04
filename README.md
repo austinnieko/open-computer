@@ -145,6 +145,8 @@ Run several coding agents on one repository without them overwriting each other.
 
 **Handoff.** A task that depends on another starts by itself when that one passes integration. Its folder is prepared first (the dependency's branch is merged in when that is clean; a conflicting merge is aborted and left to the agent), and its agent's first brief carries the dependency's check-out note, branch and changed files. If a dependency is ended or fails, the dependent shows **Needs you** instead of waiting forever.
 
+**Folders.** Every folder of one repository (its main checkout and its worktrees) shares one task list, so conflicts and dependencies are seen across all of them. Each task belongs to the folder it was started from: its chat is listed under that folder in the sidebar, and the dashboard shows that folder's tasks, with **All of <repo>** to see the rest.
+
 ![A task's page: actions, dependencies and a detected conflict](./docs/images/coordination-task-detail-dependent-task.png)
 
 **What it does for you**
@@ -155,7 +157,7 @@ Run several coding agents on one repository without them overwriting each other.
 | 🔍 **Conflict detection** | Evidence comes from Git, with no AI guessing: same files, shared config, lockfiles, parallel migrations, public functions changed and used by another task, mismatched dependency versions, and branches that won't merge (`git merge-tree`). Conflicts are graded *info → potential → confirmed → blocking*. |
 | ⏸️ **Pauses only what it must** | A blocking conflict holds only the dependent task. Unrelated agents keep working. |
 | 💬 **Agents keep each other informed** | Structured notes ("I changed the detection API", "we both edit settings.toml") go to the affected agents only, at the start of their next turn. |
-| 🧭 **Dependencies** | Tasks wait for their prerequisites to pass integration. Circular dependencies are rejected. At most 4 task agents write code at once per repository by default; change it from the Agents & tasks header (`coordination.max_writers`). |
+| 🧭 **Dependencies** | Tasks wait for their prerequisites to pass integration. Circular dependencies are rejected. Add or remove (×) a dependency from a task's page at any time. Agents that check out *continuing* are checked on after `coordination.checkin_minutes` (Settings → Agents; default 10, 0 = off). At most 4 task agents write code at once per repository by default; change it from the Agents & tasks header (`coordination.max_writers`). |
 | 🧪 **Safe integration** | Finished branches are merged in dependency order into a separate `coord/integration-<run>` worktree and tested together. If the combined tests fail, the first task that broke them is identified and asked for a fix. Your base branch is never touched. |
 | 🔁 **Survives restarts** | Tasks, claims, conflicts and messages are stored in the database. After a restart, the coordinator checks them against live chats and worktrees, and doesn't repeat work or create duplicate PRs. |
 | 🔒 **You stay in control** | Publishing a PR and removing a worktree ask for confirmation. Worktrees with uncommitted changes are never deleted. The coordinator has no way to merge a PR. |

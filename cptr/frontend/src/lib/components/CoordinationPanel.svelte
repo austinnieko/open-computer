@@ -20,6 +20,7 @@
 	import { getGitBranches } from '$lib/apis/git';
 	import {
 		addCoordDependency,
+		removeCoordDependency,
 		deleteCoordTask,
 		endCoordTask,
 		getCoordTaskDiff,
@@ -100,6 +101,23 @@
 	const norm = (p: string) => p.replace(/\/+$/, '');
 	const repoName = $derived(coord.repoRoot ? norm(coord.repoRoot).split('/').pop() : '');
 	const sharedRepo = $derived(!!coord.repoRoot && norm(coord.repoRoot) !== norm(root));
+
+	// Tasks remember the folder they were started from (meta.origin_root). When a
+	// repository's tasks come from more than one folder, the list shows this
+	// folder's tasks by default and can switch to all of them.
+	const originOf = (task: CoordTask) =>
+		norm(String(task.meta?.origin_root ?? coord.repoRoot ?? ''));
+	const folderName = (path: string) => path.split('/').pop() || path;
+	const viewRoot = $derived(norm(coord.viewRoot || root));
+	const origins = $derived(new Set(coord.tasks.map(originOf)));
+	const mixedFolders = $derived(origins.size > 1 || (origins.size === 1 && !origins.has(viewRoot)));
+	let folderScope = $state<'here' | 'all'>('here');
+	const hereCount = $derived(coord.tasks.filter((task) => originOf(task) === viewRoot).length);
+	const listedTasks = $derived(
+		mixedFolders && folderScope === 'here'
+			? coord.tasks.filter((task) => originOf(task) === viewRoot)
+			: coord.tasks
+	);
 
 	// "Start from" branches for New task: this workspace's local branches, its
 	// current branch first. Task and integration branches are left out.
@@ -184,6 +202,7 @@
 	const LIFE_CLASS: Record<string, string> = {
 		working: 'bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300',
 		in_line: 'bg-gray-100 text-gray-600 dark:bg-white/8 dark:text-gray-300',
+		background: 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
 		needs_you: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
 		blocked: 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300',
 		stopped: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400',
@@ -233,13 +252,14 @@
 		needs_you: 0,
 		blocked: 1,
 		working: 2,
+		background: 2,
 		in_line: 3,
 		stopped: 4
 	};
 	const grouped = $derived(
 		STAGES.map((key) => ({
 			key,
-			tasks: coord.tasks
+			tasks: listedTasks
 				.filter((task) => {
 					const stage = life(task).stage;
 					return key === 'done' ? stage === 'done' || stage === 'ended' : stage === key;
@@ -679,6 +699,33 @@
 					? 'hidden md:block'
 					: 'block'}"
 			>
+				{#if mixedFolders}
+					<div class="folder-scope" role="tablist">
+						<button
+							role="tab"
+							aria-selected={folderScope === 'here'}
+							class:folder-scope-on={folderScope === 'here'}
+							onclick={() => (folderScope = 'here')}
+							use:tooltip={viewRoot}
+						>
+							{$t('coordination.scope.here', { folder: folderName(viewRoot) })} · {hereCount}
+						</button>
+						<button
+							role="tab"
+							aria-selected={folderScope === 'all'}
+							class:folder-scope-on={folderScope === 'all'}
+							onclick={() => (folderScope = 'all')}
+							use:tooltip={$t('coordination.scope.allHint', { repo: repoName })}
+						>
+							{$t('coordination.scope.all', { repo: repoName })} · {coord.tasks.length}
+						</button>
+					</div>
+					{#if folderScope === 'here' && !hereCount}
+						<p class="px-3 py-2 text-xs text-gray-500">
+							{$t('coordination.scope.noneHere', { count: coord.tasks.length })}
+						</p>
+					{/if}
+				{/if}
 				{#each grouped as group (group.key)}
 					{#if group.key !== 'done' || showDone}
 						<div class="section-label">
@@ -702,6 +749,15 @@
 									<span class="truncate font-medium text-gray-800 dark:text-gray-100">
 										{task.title}
 									</span>
+									{#if mixedFolders && folderScope === 'all'}
+										<span
+											class="folder-chip"
+											class:folder-chip-here={originOf(task) === viewRoot}
+											use:tooltip={$t('coordination.startedIn', { path: originOf(task) })}
+										>
+											<Icon name="folder" size={10} />{folderName(originOf(task))}
+										</span>
+									{/if}
 									{#if worst && levelRank(worst.level) >= 1}
 										<span
 											class="ml-auto shrink-0 text-[0.625rem] font-semibold uppercase {LEVEL_CLASS[
@@ -1038,6 +1094,11 @@
 						<dl class="facts">
 							<dt>{$t('coordination.branch')}</dt>
 							<dd class="font-mono">{task.branch ?? '—'}</dd>
+							<dt>{$t('coordination.startedFrom')}</dt>
+							<dd class="break-all">
+								<span class="font-mono">{folderName(originOf(task))}</span>
+								<span class="ml-1 text-[0.6875rem] text-gray-400">{originOf(task)}</span>
+							</dd>
 							<dt>{$t('coordination.base')}</dt>
 							<dd class="font-mono">{task.meta.base_branch ?? task.base_ref ?? '—'}</dd>
 							<dt>{$t('coordination.worktree')}</dt>
@@ -1126,23 +1187,50 @@
 								<p class="text-xs text-gray-500">{$t('coordination.noDependencies')}</p>
 							{/if}
 							{#each dependsOn(task.id) as dep}
-								<button class="dep-row" onclick={() => select(dep.id)}>
-									<Icon name="arrow-left" size={12} />
-									<span class="truncate">{$t('coordination.dependsOn')} {dep.title}</span>
-									<span class="pill ml-auto {STATUS_CLASS[displayStatus(dep)]}"
-										>{statusLabel(displayStatus(dep))}</span
+								<div class="dep-line">
+									<button class="dep-row" onclick={() => select(dep.id)}>
+										<Icon name="arrow-left" size={12} />
+										<span class="truncate">{$t('coordination.dependsOn')} {dep.title}</span>
+										<span class="pill ml-auto {STATUS_CLASS[displayStatus(dep)]}"
+											>{statusLabel(displayStatus(dep))}</span
+										>
+									</button>
+									<button
+										class="dep-remove"
+										title={$t('coordination.removeDependency')}
+										aria-label={$t('coordination.removeDependency')}
+										disabled={busy === `dep:${task.id}`}
+										onclick={() =>
+											run(`dep:${task.id}`, () => removeCoordDependency(task.id, dep.id))}
 									>
-								</button>
+										<Icon name="xmark" size={12} />
+									</button>
+								</div>
 							{/each}
 							{#each requiredBy(task.id) as dep}
-								<button class="dep-row" onclick={() => select(dep.id)}>
-									<Icon name="arrow-right-from-line" size={12} />
-									<span class="truncate">{$t('coordination.requiredBy')} {dep.title}</span>
-									<span class="pill ml-auto {STATUS_CLASS[displayStatus(dep)]}"
-										>{statusLabel(displayStatus(dep))}</span
+								<div class="dep-line">
+									<button class="dep-row" onclick={() => select(dep.id)}>
+										<Icon name="arrow-right-from-line" size={12} />
+										<span class="truncate">{$t('coordination.requiredBy')} {dep.title}</span>
+										<span class="pill ml-auto {STATUS_CLASS[displayStatus(dep)]}"
+											>{statusLabel(displayStatus(dep))}</span
+										>
+									</button>
+									<button
+										class="dep-remove"
+										title={$t('coordination.removeDependency')}
+										aria-label={$t('coordination.removeDependency')}
+										disabled={busy === `dep:${dep.id}`}
+										onclick={() =>
+											run(`dep:${dep.id}`, () => removeCoordDependency(dep.id, task.id))}
 									>
-								</button>
+										<Icon name="xmark" size={12} />
+									</button>
+								</div>
 							{/each}
+							{#if dependsOn(task.id).length && task.status === 'blocked'}
+								<p class="mt-1 text-xs text-gray-500">{$t('coordination.removeDependencyHint')}</p>
+							{/if}
 							{#if coord.tasks.filter((o) => o.id !== task.id && !['completed', 'failed', 'ended'].includes(o.status) && !dependsOn(task.id).some((d) => d.id === o.id)).length}
 								<select
 									class="field mt-1 text-xs"
@@ -1518,6 +1606,57 @@
 		font-size: 0.8125rem;
 		color: rgb(107 114 128);
 	}
+	.folder-scope {
+		display: flex;
+		gap: 0.25rem;
+		padding: 0.5rem 0.75rem 0.125rem;
+	}
+	.folder-scope button {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		border-radius: 9999px;
+		padding: 0.125rem 0.5rem;
+		font-size: 0.6875rem;
+		color: rgb(107 114 128);
+		border: 1px solid rgb(229 231 235);
+	}
+	:global(.dark) .folder-scope button {
+		border-color: rgb(255 255 255 / 0.08);
+		color: rgb(156 163 175);
+	}
+	.folder-scope button.folder-scope-on {
+		background: rgb(17 24 39);
+		border-color: rgb(17 24 39);
+		color: white;
+	}
+	:global(.dark) .folder-scope button.folder-scope-on {
+		background: rgb(255 255 255 / 0.9);
+		border-color: transparent;
+		color: rgb(17 24 39);
+	}
+	.folder-chip {
+		display: inline-flex;
+		flex-shrink: 0;
+		align-items: center;
+		gap: 0.1875rem;
+		max-width: 8rem;
+		overflow: hidden;
+		border-radius: 0.25rem;
+		background: rgb(14 165 233 / 0.1);
+		padding: 0 0.3125rem;
+		font-size: 0.625rem;
+		color: rgb(3 105 161);
+		white-space: nowrap;
+	}
+	:global(.dark) .folder-chip {
+		color: rgb(125 211 252);
+	}
+	.folder-chip.folder-chip-here {
+		background: rgb(0 0 0 / 0.05);
+		color: rgb(107 114 128);
+	}
 	.section-label {
 		padding: 0.625rem 0.75rem 0.25rem;
 		font-size: 0.625rem;
@@ -1576,8 +1715,28 @@
 	.facts dt {
 		color: rgb(107 114 128);
 	}
+	.dep-line {
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
+	}
+	.dep-remove {
+		flex: none;
+		border-radius: 0.25rem;
+		padding: 0.25rem;
+		color: rgb(107 114 128);
+	}
+	.dep-remove:hover:not(:disabled) {
+		background: rgb(0 0 0 / 0.06);
+		color: rgb(220 38 38);
+	}
+	.dep-remove:disabled {
+		opacity: 0.4;
+	}
 	.dep-row {
 		display: flex;
+		min-width: 0;
+		flex: 1;
 		width: 100%;
 		align-items: center;
 		gap: 0.375rem;

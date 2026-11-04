@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 _scan_locks: dict[str, asyncio.Lock] = {}
 _inflight: dict[str, asyncio.Task] = {}
 _dirty: set[str] = set()
+_checkins: dict[str, asyncio.Task] = {}
 _BLOCKABLE = {"queued", "running", "paused", "reviewing", "integration_ready"}
 _NOTIFY_CHANGES = {"new", "escalated", "reopened"}
 
@@ -31,6 +32,9 @@ def _reset_for_tests() -> None:
     _scan_locks.clear()
     _inflight.clear()
     _dirty.clear()
+    for timer in _checkins.values():
+        timer.cancel()
+    _checkins.clear()
 
 
 async def _emit(user_ids: set[str], payload: dict) -> None:
@@ -297,6 +301,10 @@ async def on_turn_start(chat_id: str, chat_meta: dict | None) -> str:
     elif task.status in {"queued", "paused"}:
         meta = dict(task.meta or {})
         meta.pop("waiting_for_user", None)
+        meta.pop("checkin_due", None)  # it is working again; no check-in needed
+        timer = _checkins.pop(task.id, None)
+        if timer and not timer.done() and timer is not asyncio.current_task():
+            timer.cancel()
         await CoordTask.update_fields(
             task.id, expect_status=task.status, status="running", meta=meta
         )
@@ -377,7 +385,7 @@ async def on_turn_end(chat_id: str, *, grace: float | None = None) -> str | None
         return None  # still working through its sub-agents
     if await Chat.get_pending_timers(root):
         return None  # it scheduled itself to continue later
-    from cptr.utils.coordination import lifecycle, registry
+    from cptr.utils.coordination import lifecycle, registry, scheduler
 
     checkout = await lifecycle.last_reply_checkout(root)
     meta = lifecycle.checkout_meta(task.meta, checkout)
@@ -392,10 +400,17 @@ async def on_turn_end(chat_id: str, *, grace: float | None = None) -> str | None
             moved = True
         except registry.CoordinationError:
             moved = False
+    continuing = bool(checkout and checkout["kind"] == "continuing")
+    if not continuing:
+        meta.pop("checkins", None)  # a real answer ends the run of check-ins
     if not moved:
-        if checkout and checkout["kind"] == "continuing":
-            # It said it would carry on, but nothing is running for it any more.
+        if continuing:
+            # It said it would carry on, but nothing visible is running for it
+            # (its own background work, e.g. an OpenCode sub-agent, may be).
             meta["checkout"]["stalled"] = True
+            minutes = await scheduler.checkin_minutes()
+            if minutes and int(meta.get("checkins") or 0) < MAX_CHECKINS:
+                meta["checkin_due"] = now_ms() + minutes * 60_000
         meta["waiting_for_user"] = now_ms()
         if not await CoordTask.update_fields(
             task.id, expect_status="running", status="queued", meta=meta
@@ -406,7 +421,86 @@ async def on_turn_end(chat_id: str, *, grace: float | None = None) -> str | None
         {"type": "coord:task", "task": (await CoordTask.get_by_id(task.id)).to_dict()},
     )
     request_refresh(task.repo_key)  # a slot is free: start the next queued task
+    if meta.get("checkin_due") and not moved:
+        schedule_checkin(task.id, meta["checkin_due"])
     return task.id
+
+
+# ── Check-ins ───────────────────────────────────────────────
+#
+# An agent that checks out *continuing* while nothing visible runs for it is
+# usually waiting on its own background work. One timer per task (not a poll)
+# puts it back in line after ``coordination.checkin_minutes`` with a short
+# "check on your background work" prompt; at most MAX_CHECKINS in a row.
+
+MAX_CHECKINS = 6
+CHECKIN_PROMPT = (
+    "[Coordinator] Check-in: you said you were still working (waiting on background "
+    "work such as sub-agents). Check on it now. If it has finished, use its results and "
+    "carry on; if it is still running, say so briefly. End with your check-out line as usual."
+)
+
+
+def schedule_checkin(task_id: str, due_ms: int) -> None:
+    """Start (or replace) the task's check-in timer."""
+    old = _checkins.pop(task_id, None)
+    if old and not old.done():
+        old.cancel()
+    delay = max(0.0, (due_ms - now_ms()) / 1000)
+    _checkins[task_id] = asyncio.create_task(_checkin_after(task_id, due_ms, delay))
+
+
+async def _checkin_after(task_id: str, due_ms: int, delay: float) -> None:
+    try:
+        await asyncio.sleep(delay)
+        await run_checkin(task_id, due_ms)
+    except asyncio.CancelledError:
+        pass
+    except Exception:  # noqa: BLE001
+        logger.exception("[coord] check-in for %s failed", task_id)
+    finally:
+        if _checkins.get(task_id) is asyncio.current_task():
+            _checkins.pop(task_id, None)
+
+
+async def run_checkin(task_id: str, due_ms: int | None = None) -> bool:
+    """Put a task waiting on its own background work back in line, once.
+
+    Does nothing if anything changed since the timer was set: the user replied,
+    the task moved, or a newer check-in replaced this one.
+    """
+    task = await CoordTask.get_by_id(task_id)
+    if not task or task.status != "queued" or not task.chat_id:
+        return False
+    meta = dict(task.meta or {})
+    due = meta.get("checkin_due")
+    if not due or (due_ms is not None and due != due_ms) or not meta.get("waiting_for_user"):
+        return False
+    if (meta.get("checkout") or {}).get("kind") != "continuing" or meta.get("start"):
+        return False
+    meta.pop("checkin_due", None)
+    meta.pop("waiting_for_user", None)
+    meta["checkins"] = int(meta.get("checkins") or 0) + 1
+    meta["start"] = {"prompt": CHECKIN_PROMPT, "model_id": None}
+    if not await CoordTask.update_fields(task.id, expect_status="queued", meta=meta):
+        return False
+    await _emit(
+        {task.user_id},
+        {"type": "coord:task", "task": (await CoordTask.get_by_id(task.id)).to_dict()},
+    )
+    request_refresh(task.repo_key)
+    return True
+
+
+async def resume_checkins() -> int:
+    """After a restart: re-arm the check-in timers that were pending."""
+    count = 0
+    for task in await CoordTask.query():
+        due = (task.meta or {}).get("checkin_due")
+        if due and task.status == "queued":
+            schedule_checkin(task.id, due)
+            count += 1
+    return count
 
 
 class CoordinationEventSink:
