@@ -629,16 +629,27 @@
 							<span class="ws-chat-loading-dot"></span>
 						</div>
 					{:else if (chats && chats.length > 0) || (ws.path === currentPath && openChats.length > 0)}
-						{#if ws.path === currentPath && openChats.length > 0}
-							{#each openChats as o (o.chat.id)}
+						<!-- One stable order (most recent first): opening a chat marks its row
+						     in place instead of moving it. Only open chats that are not in the
+						     list yet (new chats, older pages) go on top. -->
+						{#if ws.path === currentPath}
+							{@const listedIds = new Set((chats ?? []).map((c) => c.id))}
+							{@const unlisted = openChats.filter((o) => !listedIds.has(o.chat.id))}
+							{#each unlisted as o (o.chat.id)}
 								{@render chatRow(o.chat, ws.path, o)}
 							{/each}
-							{#if (chats ?? []).some((c) => !openChatIds.has(c.id))}
+							{#if unlisted.length && (chats ?? []).length}
 								<div class="ws-chats-divider"></div>
 							{/if}
 						{/if}
-						{#each (chats ?? []).filter((c) => ws.path !== currentPath || !openChatIds.has(c.id)) as chat (chat.id)}
-							{@render chatRow(chat, ws.path, null)}
+						{#each chats ?? [] as chat (chat.id)}
+							{@render chatRow(
+								chat,
+								ws.path,
+								ws.path === currentPath
+									? (openChats.find((o) => o.chat.id === chat.id) ?? null)
+									: null
+							)}
 						{/each}
 						{#if hasMoreChats}
 							<button

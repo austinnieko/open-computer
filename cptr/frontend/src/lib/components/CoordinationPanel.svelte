@@ -17,6 +17,7 @@
 	import { addWorkspace, openChatTab } from '$lib/stores';
 	import { requestConfirm } from '$lib/stores/confirm';
 	import { chatModels, defaultModel } from '$lib/stores/chat';
+	import { getGitBranches } from '$lib/apis/git';
 	import {
 		addCoordDependency,
 		deleteCoordTask,
@@ -89,6 +90,32 @@
 	}
 	let busy = $state<string | null>(null);
 	let showNewTask = $state(false);
+
+	// Which repository these tasks belong to. Tasks are shared by every folder of
+	// one repository (its main checkout, its worktrees and any folder inside it).
+	const norm = (p: string) => p.replace(/\/+$/, '');
+	const repoName = $derived(coord.repoRoot ? norm(coord.repoRoot).split('/').pop() : '');
+	const sharedRepo = $derived(!!coord.repoRoot && norm(coord.repoRoot) !== norm(root));
+
+	// "Start from" branches for New task: this workspace's local branches, its
+	// current branch first. Task and integration branches are left out.
+	let baseOptions = $state<string[]>([]);
+	$effect(() => {
+		if (!showNewTask) return;
+		const path = root;
+		getGitBranches(path)
+			.then((data: any) => {
+				const local: string[] = (data?.local ?? []).filter(
+					(b: string) => !b.startsWith('task/') && !b.startsWith('coord/')
+				);
+				const current: string = data?.current ?? '';
+				baseOptions = current && !local.includes(current) ? [current, ...local] : local;
+				if (!form.base) form.base = current || baseOptions[0] || '';
+			})
+			.catch(() => {
+				baseOptions = [];
+			});
+	});
 	let diffFor = $state<string | null>(null);
 	let diffFiles = $state<DiffFile[]>([]);
 	let diffUntracked = $state<string[]>([]);
@@ -329,7 +356,8 @@
 		startPrompt: '',
 		testCommand: '',
 		dependsOn: [] as string[],
-		model: initialModel()
+		model: initialModel(),
+		base: ''
 	});
 
 	// The model list can load after this panel mounts; fill the picker once it
@@ -345,7 +373,8 @@
 			startPrompt: '',
 			testCommand: '',
 			dependsOn: [],
-			model: initialModel()
+			model: initialModel(),
+			base: ''
 		};
 	}
 
@@ -364,7 +393,8 @@
 				create_chat: true,
 				start_prompt: form.startPrompt.trim() || undefined,
 				model_id: form.model ?? undefined,
-				test_command: form.testCommand.trim() || undefined
+				test_command: form.testCommand.trim() || undefined,
+				base_ref: form.base || undefined
 			});
 			if (result.worktree?.error) toast.error(result.worktree.error);
 			selectedId = result.task.id;
@@ -384,6 +414,11 @@
 			<span class="truncate font-medium text-gray-800 dark:text-gray-100">
 				{$t('coordination.title')}
 			</span>
+			{#if repoName}
+				<span class="truncate font-mono text-[0.6875rem] text-gray-400" use:tooltip={coord.repoRoot}
+					>{repoName}</span
+				>
+			{/if}
 			{#if coord.loading}<Spinner size={12} />{/if}
 		</div>
 		<div
@@ -429,6 +464,15 @@
 			</button>
 		</div>
 	</div>
+
+	{#if sharedRepo}
+		<div
+			class="flex items-start gap-2 border-b border-gray-100 bg-sky-50/60 px-3 py-2 text-xs text-gray-600 dark:border-white/6 dark:bg-sky-500/[0.06] dark:text-gray-300"
+		>
+			<Icon name="info" size={13} class="mt-0.5 shrink-0 text-sky-600 dark:text-sky-400" />
+			<span>{$t('coordination.sharedRepo', { repo: repoName, path: coord.repoRoot })}</span>
+		</div>
+	{/if}
 
 	{#if !coord.notRepo}
 		{#if showHow || (coord.loaded && !coord.tasks.length)}
@@ -1176,6 +1220,19 @@
 				<span class="label mb-0">{$t('coordination.model')}</span>
 				<ModelSelector bind:selectedModel={form.model} preferAbove={false} align="start" />
 			</div>
+			{#if baseOptions.length}
+				<label class="block">
+					<span class="label">{$t('coordination.startFrom')}</span>
+					<select class="field font-mono" bind:value={form.base}>
+						{#each baseOptions as name (name)}
+							<option value={name}>{name}</option>
+						{/each}
+					</select>
+					<span class="mt-1 block text-[0.6875rem] text-gray-400">
+						{$t('coordination.startFromHint')}
+					</span>
+				</label>
+			{/if}
 			<label class="block">
 				<span class="label">{$t('coordination.testCommand')}</span>
 				<input class="field font-mono" bind:value={form.testCommand} placeholder="npm test" />
