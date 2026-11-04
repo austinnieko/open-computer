@@ -39,6 +39,7 @@
 	import {
 		coordinationFocus,
 		coordinationOf,
+		displayStatus,
 		levelRank,
 		refresh,
 		trackCoordination,
@@ -110,6 +111,7 @@
 
 	const STATUS_CLASS: Record<string, string> = {
 		queued: 'bg-gray-100 text-gray-600 dark:bg-white/8 dark:text-gray-300',
+		awaiting_input: 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
 		running: 'bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300',
 		blocked: 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300',
 		paused: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
@@ -413,7 +415,9 @@
 								<div
 									class="mt-0.5 flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-gray-500 dark:text-gray-400"
 								>
-									<span class="pill {STATUS_CLASS[task.status]}">{statusLabel(task.status)}</span>
+									<span class="pill {STATUS_CLASS[displayStatus(task)]}"
+										>{statusLabel(displayStatus(task))}</span
+									>
 									{#if task.branch}<span class="truncate font-mono">{task.branch}</span>{/if}
 									{#if task.pr_number}
 										<span class="shrink-0">#{task.pr_number}</span>
@@ -491,7 +495,9 @@
 								<h2 class="min-w-0 text-base font-semibold text-gray-900 dark:text-gray-50">
 									{task.title}
 								</h2>
-								<span class="pill {STATUS_CLASS[task.status]}">{statusLabel(task.status)}</span>
+								<span class="pill {STATUS_CLASS[displayStatus(task)]}"
+									>{statusLabel(displayStatus(task))}</span
+								>
 								{#if task.chat_id && coord.activeChats.has(task.chat_id)}
 									<span
 										class="flex items-center gap-1 text-[0.6875rem] text-blue-600 dark:text-blue-400"
@@ -691,8 +697,8 @@
 								<button class="dep-row" onclick={() => select(dep.id)}>
 									<Icon name="arrow-left" size={12} />
 									<span class="truncate">{$t('coordination.dependsOn')} {dep.title}</span>
-									<span class="pill ml-auto {STATUS_CLASS[dep.status]}"
-										>{statusLabel(dep.status)}</span
+									<span class="pill ml-auto {STATUS_CLASS[displayStatus(dep)]}"
+										>{statusLabel(displayStatus(dep))}</span
 									>
 								</button>
 							{/each}
@@ -700,8 +706,8 @@
 								<button class="dep-row" onclick={() => select(dep.id)}>
 									<Icon name="arrow-right-from-line" size={12} />
 									<span class="truncate">{$t('coordination.requiredBy')} {dep.title}</span>
-									<span class="pill ml-auto {STATUS_CLASS[dep.status]}"
-										>{statusLabel(dep.status)}</span
+									<span class="pill ml-auto {STATUS_CLASS[displayStatus(dep)]}"
+										>{statusLabel(displayStatus(dep))}</span
 									>
 								</button>
 							{/each}

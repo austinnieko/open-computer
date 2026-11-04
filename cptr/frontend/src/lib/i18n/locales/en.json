@@ -1397,6 +1397,7 @@
 	"coordination.startPrompt": "Instructions for the agent (optional)",
 	"coordination.startPromptHint": "Leave empty to drive the agent yourself from its chat.",
 	"coordination.status.queued": "Queued",
+	"coordination.status.awaiting_input": "Ready – send a message",
 	"coordination.status.running": "Running",
 	"coordination.status.blocked": "Blocked",
 	"coordination.status.paused": "Paused",

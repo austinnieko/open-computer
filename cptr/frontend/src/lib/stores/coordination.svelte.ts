@@ -191,3 +191,20 @@ export function worstConflict(conflicts: CoordConflict[], taskId: string): Coord
 export function levelRank(level: string): number {
 	return LEVEL_RANK[level] ?? 0;
 }
+
+/**
+ * Status to show for a task. A queued task with a chat, no pending start
+ * prompt and nothing blocking it is not waiting on the scheduler: it starts
+ * when the user sends a message in its chat, so show that instead of "Queued".
+ */
+export function displayStatus(task: CoordTask): string {
+	if (
+		task.status === 'queued' &&
+		task.chat_id &&
+		!task.meta?.start &&
+		!(task.blockers ?? []).length
+	) {
+		return 'awaiting_input';
+	}
+	return task.status;
+}

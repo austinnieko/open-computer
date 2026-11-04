@@ -96,6 +96,16 @@ async def auth_status(identity: ExecutionIdentity, hostname: str | None = None) 
     if hostname:
         args.extend(["--hostname", hostname])
     code, out, err = await run_gh(args, identity=identity, check=False, timeout=10)
+    if code != 0 and "unknown flag: --json" in err:
+        # gh older than 2.50ish (e.g. Ubuntu's 2.45 package) has no --json here;
+        # read the human-readable output instead.
+        text_args = ["auth", "status"] + (["--hostname", hostname] if hostname else [])
+        _, out, err = await run_gh(text_args, identity=identity, check=False, timeout=10)
+        hosts = parse_auth_status_text(out + "\n" + err)
+        result: dict[str, Any] = {"installed": True, "version": gh_version, "hosts": hosts}
+        if not hosts:
+            result["message"] = (err or out).strip()
+        return result
     if not out.strip():
         return {"installed": True, "version": gh_version, "hosts": {}, "message": err.strip()}
     try:
@@ -103,6 +113,57 @@ async def auth_status(identity: ExecutionIdentity, hostname: str | None = None) 
     except json.JSONDecodeError:
         return {"installed": True, "version": gh_version, "hosts": {}, "message": err.strip()}
     return {"installed": True, "version": gh_version, "hosts": data.get("hosts") or {}}
+
+
+_ACCOUNT_LINE = re.compile(
+    r"^\s*(?:✓|X|x|!)\s+(Logged in|Failed to log in) to (\S+?) (?:account|as) (\S+?)"
+    r"(?: \(([^)]*)\))?\s*$"
+)
+
+
+def parse_auth_status_text(text: str) -> dict[str, list[dict[str, Any]]]:
+    """Parse plain ``gh auth status`` output into the ``--json hosts`` shape.
+
+    Handles both the multi-account format ("Logged in to H account U (src)")
+    and the older one ("Logged in to H as U (src)"). Tokens are never read.
+    """
+    hosts: dict[str, list[dict[str, Any]]] = {}
+    current: dict[str, Any] | None = None
+    for line in text.splitlines():
+        match = _ACCOUNT_LINE.match(line)
+        if match:
+            ok, host, login, source = match.groups()
+            current = {
+                "state": "success" if ok == "Logged in" else "error",
+                "active": None,
+                "host": host,
+                "login": login,
+                "tokenSource": source or "",
+                "scopes": "",
+                "gitProtocol": "",
+            }
+            hosts.setdefault(host, []).append(current)
+            continue
+        if current is None:
+            continue
+        detail = re.sub(r"^[\s✓X!-]+", "", line).rstrip(" .")
+        key, _, value = detail.partition(":")
+        value = value.strip()
+        if key == "Active account":
+            current["active"] = value.lower() == "true"
+        elif key == "Git operations protocol":
+            current["gitProtocol"] = value
+        elif detail.startswith("Git operations for ") and " configured to use " in detail:
+            current["gitProtocol"] = detail.split(" configured to use ")[1].split()[0]
+        elif key == "Token scopes":
+            current["scopes"] = value.replace("'", "")
+    for accounts in hosts.values():
+        # Older gh has one account per host and no "Active account" line.
+        if not any(a["active"] for a in accounts):
+            accounts[0]["active"] = True
+        for account in accounts:
+            account["active"] = bool(account["active"])
+    return hosts
 
 
 def parse_device_prompt(text: str) -> tuple[str, str]:
