@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 🌿 **Choose where a new task starts.** New task has a **Start from** branch, defaulting to the branch of the folder you are in, so a task opened from a worktree starts from that worktree's branch instead of the main checkout's.
 - 🅰️ **Tell agents from chats in the sidebar.** Each chat row has a small badge: **A** for a task's agent chat, coloured by the task's status (green running, blue waiting for you, amber paused or blocked, purple in review, red failed, grey done), and **C** for a normal chat, green while it is working. Hover the badge for the status.
 - 🧭 **Agents & tasks from the sidebar.** A workspace's ⋯ menu now opens its Agents & tasks dashboard, even from Home.
 - 🤝 **Multi-agent coordination.** Several coding agents can now work on the same repository at once without overwriting each other. Each task gets its own branch, its own worktree beside the repo, and an agent chat that runs inside that worktree. Conflicts between tasks are detected from Git, graded info, potential, confirmed or blocking, and shown with their evidence. A blocking conflict pauses only the dependent task, and each affected agent is told on its next turn. Tasks wait for the tasks they depend on, and at most 2 write code at once per repository. Finished branches are merged in dependency order and tested together in a separate integration worktree; if the combined tests fail, the task that broke them is asked for a fix. PRs are published only when you confirm, never duplicated, and never merged for you. Your base branch is never touched.
@@ -19,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 🧭 **Agents & tasks says which repository it shows.** The header names the repository, and a folder that is part of another repository (a worktree of it, or a folder inside it) explains that it shares that repository's task list.
+- 📌 **The sidebar no longer reshuffles when you open a chat.** Chats keep one order (most recent first) and an open chat is marked in place; its close button replaces its time, so long titles are no longer cut short.
 - 🧹 **Deleting a task's chat removes the task too.** Deleting an agent chat from the sidebar now asks first, then removes its task from Agents & tasks; the branch, commits and folder are kept. Tasks whose chat was deleted earlier show **Chat deleted**, with a **Delete task** button at the top of the task, and can be deleted without ending them first.
 - 🗂️ **Task chats behave like other chats in the sidebar.** A chat made by New task now gets its chat file straight away (older ones are filled in when the Agents dashboard loads), so it shows its time and ⋯ menu instead of a bare row. Deleting a chat that is open now also closes it, so its row goes away.
 - 🤖 **New tasks start with your default model.** The Model picker in the New task form now starts on the default model, like a new chat, instead of "Current model".

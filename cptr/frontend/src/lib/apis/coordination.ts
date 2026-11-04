@@ -174,6 +174,8 @@ export interface RegisterTaskBody {
 	title: string;
 	description?: string;
 	branch?: string;
+	/** Branch the task starts from (and integrates into). Default: the repo's HEAD. */
+	base_ref?: string;
 	depends_on?: string[];
 	files?: string[];
 	isolate?: boolean;

@@ -86,15 +86,20 @@
 				: 'text-gray-500 dark:text-gray-500'}">{chat.title}</span
 	>
 	{#if chat.updated_at}
-		<span class="text-[0.625rem] text-gray-300 dark:text-gray-700 shrink-0 tabular-nums"
-			>{formatTime(chat.updated_at)}</span
+		<!-- Room for the title: an open row swaps its time for the close button. -->
+		<span
+			class="text-[0.625rem] text-gray-300 dark:text-gray-700 shrink-0 tabular-nums {onclose
+				? isSelected
+					? 'hidden'
+					: 'group-hover/chat:hidden'
+				: ''}">{formatTime(chat.updated_at)}</span
 		>
 	{/if}
 	{#if onclose}
 		<button
-			class="flex items-center justify-center w-5 h-5 rounded shrink-0 text-gray-400 opacity-0 group-hover/chat:opacity-100 {isSelected
-				? 'opacity-100'
-				: ''} hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-white/10 transition-all duration-75"
+			class="{isSelected
+				? 'flex'
+				: 'hidden group-hover/chat:flex'} items-center justify-center w-5 h-5 rounded shrink-0 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-white/10 transition-all duration-75"
 			onclick={(e) => {
 				e.stopPropagation();
 				onclose?.();
