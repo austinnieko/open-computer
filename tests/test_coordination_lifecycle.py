@@ -182,3 +182,81 @@ class StartRouteTests(ApiTestCase):
         task = (await self.post("/tasks", body)).json()["task"]
         started = (await self.post(f"/tasks/{task['id']}/start")).json()
         self.assertEqual(started["meta"]["start"]["prompt"], "Start working on this task.")
+
+
+class RemoveDependencyTests(SettledTestCase):
+    async def test_removing_a_dependency_lets_the_waiting_task_start(self):
+        a = await self.task("First")
+        b_chat = await Chat.create(USER, "B", meta={"last_model": "m"})
+        b = await self.task("Second", chat_id=b_chat.id, start_prompt="go", depends_on=[a["id"]])
+        await coordinator.refresh(a["repo_key"])
+        self.assertNotIn(b["id"], [t for t, _ in self.launched])
+
+        from cptr.utils.coordination import scheduler
+
+        self.assertTrue(await scheduler.remove_dependency(b["id"], a["id"]))
+        await coordinator.refresh(a["repo_key"])
+        self.assertIn(b["id"], [t for t, _ in self.launched])
+        self.assertEqual(await lifecycle.dependencies_of(await CoordTask.get_by_id(b["id"])), [])
+
+
+class CheckinTests(SettledTestCase):
+    _running = CheckoutTests._running
+    _reply = CheckoutTests._reply
+
+    async def _continuing(self, title: str) -> CoordTask:
+        task = await self._running(title)
+        await self._reply(task.chat_id, "CHECKOUT: continuing - reviewer sub-agent running")
+        await coordinator.on_turn_end(task.chat_id, grace=0)
+        return await CoordTask.get_by_id(task.id)
+
+    async def test_continuing_sets_a_checkin_that_puts_the_task_back_in_line(self):
+        task = await self._continuing("Review")
+        due = task.meta["checkin_due"]
+        self.assertIn(task.id, coordinator._checkins)
+        self.assertTrue(await coordinator.run_checkin(task.id, due))
+        await coordinator.wait_idle()
+        task = await CoordTask.get_by_id(task.id)
+        self.assertNotIn("waiting_for_user", task.meta)
+        self.assertEqual(task.meta["checkins"], 1)  # survives the launch
+        self.assertNotIn("checkin_due", task.meta)
+        launched = [p for t, p in self.launched if t == task.id]
+        self.assertTrue(launched and "Check-in" in launched[-1])
+
+    async def test_a_reply_first_cancels_the_checkin(self):
+        task = await self._continuing("Replied")
+        due = task.meta["checkin_due"]
+        chat = await Chat.get_by_id(task.chat_id)
+        await coordinator.on_turn_start(task.chat_id, chat.meta)
+        self.assertNotIn(task.id, coordinator._checkins)
+        self.assertFalse(await coordinator.run_checkin(task.id, due))
+
+    async def test_zero_turns_checkins_off(self):
+        from cptr.models import Config
+
+        await Config.upsert({"coordination.checkin_minutes": 0})
+        task = await self._continuing("Off")
+        self.assertNotIn("checkin_due", task.meta)
+        self.assertNotIn(task.id, coordinator._checkins)
+
+    async def test_checkins_stop_after_the_cap(self):
+        task = await self._running("Capped")
+        await CoordTask.update_fields(
+            task.id, meta={**task.meta, "checkins": coordinator.MAX_CHECKINS}
+        )
+        await self._reply(task.chat_id, "CHECKOUT: continuing - still going")
+        await coordinator.on_turn_end(task.chat_id, grace=0)
+        self.assertNotIn("checkin_due", (await CoordTask.get_by_id(task.id)).meta)
+
+
+class CheckinSettingTests(ApiTestCase):
+    async def test_setting_round_trips_and_is_listed(self):
+        url = "/api/coordination/limits"
+        self.assertEqual((await self.client.get(url)).json()["checkin_minutes"], 10)
+        r = await self.client.put(url, json={"checkin_minutes": 25})
+        self.assertEqual(r.json()["checkin_minutes"], 25)
+        self.assertEqual(r.json()["max_writers"], 4)  # untouched
+        bad = await self.client.put(url, json={"checkin_minutes": 999})
+        self.assertEqual(bad.status_code, 422)
+        listed = (await self.client.get(f"/api/coordination/tasks?root={self.repo}")).json()
+        self.assertEqual(listed["limits"]["checkin_minutes"], 25)

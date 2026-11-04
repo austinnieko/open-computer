@@ -75,6 +75,9 @@ async def lifespan(app: FastAPI):
         from cptr.utils.coordination.integration import reconcile as reconcile_integrations
 
         await reconcile_integrations()
+        from cptr.utils.coordination.coordinator import resume_checkins
+
+        await resume_checkins()
     except Exception:
         _logging.getLogger(__name__).exception("coordination reconcile failed")
 

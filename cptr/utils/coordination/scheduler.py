@@ -106,6 +106,23 @@ async def _limits() -> tuple[int, int]:
     )
 
 
+DEFAULT_CHECKIN_MINUTES = 10
+MAX_CHECKIN_MINUTES = 240
+
+
+async def checkin_minutes() -> int:
+    """Minutes before an agent that checked out *continuing* is nudged (0 = never)."""
+    from cptr.models import Config
+
+    value = await Config.get("coordination.checkin_minutes")
+    if value is None:
+        return DEFAULT_CHECKIN_MINUTES
+    try:
+        return min(MAX_CHECKIN_MINUTES, max(0, int(value)))
+    except (TypeError, ValueError):
+        return DEFAULT_CHECKIN_MINUTES
+
+
 def _waiting_blocker(waiting: list[str]) -> dict:
     return {"kind": "waiting_on", "detail": ", ".join(waiting), "tasks": waiting, "since": now_ms()}
 

@@ -20,6 +20,7 @@
 	import { getGitBranches } from '$lib/apis/git';
 	import {
 		addCoordDependency,
+		removeCoordDependency,
 		deleteCoordTask,
 		endCoordTask,
 		getCoordTaskDiff,
@@ -184,6 +185,7 @@
 	const LIFE_CLASS: Record<string, string> = {
 		working: 'bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300',
 		in_line: 'bg-gray-100 text-gray-600 dark:bg-white/8 dark:text-gray-300',
+		background: 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
 		needs_you: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
 		blocked: 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300',
 		stopped: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400',
@@ -233,6 +235,7 @@
 		needs_you: 0,
 		blocked: 1,
 		working: 2,
+		background: 2,
 		in_line: 3,
 		stopped: 4
 	};
@@ -1126,23 +1129,50 @@
 								<p class="text-xs text-gray-500">{$t('coordination.noDependencies')}</p>
 							{/if}
 							{#each dependsOn(task.id) as dep}
-								<button class="dep-row" onclick={() => select(dep.id)}>
-									<Icon name="arrow-left" size={12} />
-									<span class="truncate">{$t('coordination.dependsOn')} {dep.title}</span>
-									<span class="pill ml-auto {STATUS_CLASS[displayStatus(dep)]}"
-										>{statusLabel(displayStatus(dep))}</span
+								<div class="dep-line">
+									<button class="dep-row" onclick={() => select(dep.id)}>
+										<Icon name="arrow-left" size={12} />
+										<span class="truncate">{$t('coordination.dependsOn')} {dep.title}</span>
+										<span class="pill ml-auto {STATUS_CLASS[displayStatus(dep)]}"
+											>{statusLabel(displayStatus(dep))}</span
+										>
+									</button>
+									<button
+										class="dep-remove"
+										title={$t('coordination.removeDependency')}
+										aria-label={$t('coordination.removeDependency')}
+										disabled={busy === `dep:${task.id}`}
+										onclick={() =>
+											run(`dep:${task.id}`, () => removeCoordDependency(task.id, dep.id))}
 									>
-								</button>
+										<Icon name="xmark" size={12} />
+									</button>
+								</div>
 							{/each}
 							{#each requiredBy(task.id) as dep}
-								<button class="dep-row" onclick={() => select(dep.id)}>
-									<Icon name="arrow-right-from-line" size={12} />
-									<span class="truncate">{$t('coordination.requiredBy')} {dep.title}</span>
-									<span class="pill ml-auto {STATUS_CLASS[displayStatus(dep)]}"
-										>{statusLabel(displayStatus(dep))}</span
+								<div class="dep-line">
+									<button class="dep-row" onclick={() => select(dep.id)}>
+										<Icon name="arrow-right-from-line" size={12} />
+										<span class="truncate">{$t('coordination.requiredBy')} {dep.title}</span>
+										<span class="pill ml-auto {STATUS_CLASS[displayStatus(dep)]}"
+											>{statusLabel(displayStatus(dep))}</span
+										>
+									</button>
+									<button
+										class="dep-remove"
+										title={$t('coordination.removeDependency')}
+										aria-label={$t('coordination.removeDependency')}
+										disabled={busy === `dep:${dep.id}`}
+										onclick={() =>
+											run(`dep:${dep.id}`, () => removeCoordDependency(dep.id, task.id))}
 									>
-								</button>
+										<Icon name="xmark" size={12} />
+									</button>
+								</div>
 							{/each}
+							{#if dependsOn(task.id).length && task.status === 'blocked'}
+								<p class="mt-1 text-xs text-gray-500">{$t('coordination.removeDependencyHint')}</p>
+							{/if}
 							{#if coord.tasks.filter((o) => o.id !== task.id && !['completed', 'failed', 'ended'].includes(o.status) && !dependsOn(task.id).some((d) => d.id === o.id)).length}
 								<select
 									class="field mt-1 text-xs"
@@ -1576,8 +1606,28 @@
 	.facts dt {
 		color: rgb(107 114 128);
 	}
+	.dep-line {
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
+	}
+	.dep-remove {
+		flex: none;
+		border-radius: 0.25rem;
+		padding: 0.25rem;
+		color: rgb(107 114 128);
+	}
+	.dep-remove:hover:not(:disabled) {
+		background: rgb(0 0 0 / 0.06);
+		color: rgb(220 38 38);
+	}
+	.dep-remove:disabled {
+		opacity: 0.4;
+	}
 	.dep-row {
 		display: flex;
+		min-width: 0;
+		flex: 1;
 		width: 100%;
 		align-items: center;
 		gap: 0.375rem;

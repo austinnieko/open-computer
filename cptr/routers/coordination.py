@@ -145,29 +145,45 @@ async def _ensure_chat_file(request: Request, workspace: str, chat_id: str) -> N
 
 
 class LimitsRequest(BaseModel):
-    max_writers: int = Field(ge=1, le=16)
+    max_writers: int | None = Field(default=None, ge=1, le=16)
+    # Minutes before an agent waiting on its own background work is nudged; 0 = never.
+    checkin_minutes: int | None = Field(default=None, ge=0, le=scheduler.MAX_CHECKIN_MINUTES)
+
+
+async def _limits_dict() -> dict:
+    max_writers, max_readers = await scheduler._limits()
+    return {
+        "max_writers": max_writers,
+        "max_readers": max_readers,
+        "checkin_minutes": await scheduler.checkin_minutes(),
+    }
 
 
 @router.get("/limits")
 async def get_limits(request: Request):
     _user_id(request)
-    max_writers, max_readers = await scheduler._limits()
-    return {"max_writers": max_writers, "max_readers": max_readers}
+    return await _limits_dict()
 
 
 @router.put("/limits")
 async def set_limits(request: Request, body: LimitsRequest):
-    """How many task agents may write code at once (admin only, instance-wide)."""
+    """Instance-wide agent settings (admin only): how many task agents may write
+    code at once, and how often an agent waiting on background work is checked on."""
     from cptr.models import Config
     from cptr.routers.admin import require_admin
 
     require_admin(request)
-    await Config.upsert({"coordination.max_writers": body.max_writers})
+    values = {}
+    if body.max_writers is not None:
+        values["coordination.max_writers"] = body.max_writers
+    if body.checkin_minutes is not None:
+        values["coordination.checkin_minutes"] = body.checkin_minutes
+    if values:
+        await Config.upsert(values)
     # A higher limit can start queued tasks right away.
     for repo_key in {t.repo_key for t in await CoordTask.query()}:
         coordinator.request_refresh(repo_key)
-    max_writers, max_readers = await scheduler._limits()
-    return {"max_writers": max_writers, "max_readers": max_readers}
+    return await _limits_dict()
 
 
 @router.get("/tasks")
@@ -202,7 +218,7 @@ async def list_tasks(request: Request, root: str):
         "active_chats": sorted(t.chat_id for t in tasks if t.chat_id and t.chat_id in active),
         "tasks": [_row(t) for t in tasks],
         # Slot limits, so the dashboard can say why a queued task hasn't started.
-        "limits": dict(zip(("max_writers", "max_readers"), await scheduler._limits())),
+        "limits": await _limits_dict(),
         "dependencies": [{"task_id": a, "depends_on": b} for a, b in deps],
     }
 
