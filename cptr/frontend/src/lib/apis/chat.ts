@@ -254,3 +254,35 @@ export const queueSendNow = (chatId: string, messageId: string) =>
 
 export const queueDelete = (chatId: string, messageId: string) =>
 	fetchJSON<{ ok: boolean }>(`/api/chats/${chatId}/queue/${messageId}`, { method: 'DELETE' });
+
+// ── Sub-agents ──────────────────────────────────────────────
+
+export type SubagentStatus = 'queued' | 'running' | 'done' | 'failed' | 'stopped';
+
+export interface SubagentActivity {
+	kind: 'tool' | 'thinking' | 'writing';
+	name?: string;
+	status?: string;
+	arguments?: Record<string, any>;
+}
+
+export interface SubagentInfo {
+	chat_id: string;
+	title: string;
+	task: string;
+	context: string;
+	mode: 'foreground' | 'background';
+	call_id: string | null;
+	parent_message_id: string | null;
+	delegation_id: string | null;
+	status: SubagentStatus;
+	started_at: number;
+	updated_at: number;
+	tool_calls: number;
+	activity: SubagentActivity | null;
+	result: string;
+	model: string | null;
+}
+
+export const getSubagents = (chatId: string) =>
+	fetchJSON<{ subagents: SubagentInfo[] }>(`/api/chats/${chatId}/subagents`);

@@ -7,6 +7,7 @@
 	import ConsecutiveActivityGroup from './ConsecutiveActivityGroup.svelte';
 	import MessageTimestamp from './MessageTimestamp.svelte';
 	import ReasoningCollapsible from './ReasoningCollapsible.svelte';
+	import SubagentCard from './SubagentCard.svelte';
 	import ToolCallCollapsible from './ToolCallCollapsible.svelte';
 	import { currentWorkspace, openFileTab } from '$lib/stores';
 	import { ttsConfigured, ttsEnabled } from '$lib/stores/audio';
@@ -277,7 +278,19 @@
 		index: number;
 	}
 
-	type DisplayItem = ActivityGroup | MessageItem | ArtifactItem | ImageItem | FileItem;
+	interface SubagentItem {
+		type: 'subagent_item';
+		item: any;
+		output: any;
+	}
+
+	type DisplayItem =
+		| ActivityGroup
+		| MessageItem
+		| ArtifactItem
+		| ImageItem
+		| FileItem
+		| SubagentItem;
 
 	const outputText = $derived.by((): string => {
 		return (output || [])
@@ -357,7 +370,15 @@
 		};
 
 		for (const [index, item] of output.entries()) {
-			if (item.type === 'function_call') {
+			if (
+				item.type === 'function_call' &&
+				item.name === 'delegate_task' &&
+				item.status !== 'pending'
+			) {
+				// Sub-agents get their own card instead of hiding in the activity group.
+				flushGroup();
+				items.push({ type: 'subagent_item', item, output: outputMap.get(item.call_id) });
+			} else if (item.type === 'function_call') {
 				if (item.name !== 'ask_user' || item.status !== 'pending') {
 					ensureGroup();
 					currentGroup!.entries.push(item);
@@ -558,6 +579,8 @@
 								<ChatFilePreview {file} {filePath} />
 							{/if}
 						</div>
+					{:else if displayItem.type === 'subagent_item'}
+						<SubagentCard item={displayItem.item} pairedOutput={displayItem.output} {chatId} />
 					{:else if displayItem.type === 'activity_group'}
 						{#if displayItem.entries.length === 1}
 							{@const item = displayItem.entries[0]}

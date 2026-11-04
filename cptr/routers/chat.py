@@ -649,6 +649,103 @@ async def _fetch_provider_models(conn: dict) -> list[str] | None:
 # ── Get a chat with all messages ────────────────────────────
 
 
+def _subagent_activity(output: list | None, done: bool) -> dict | None:
+    """Describe the latest step a sub-agent took, for a one-line status."""
+    for item in reversed(output or []):
+        kind = item.get("type") if isinstance(item, dict) else None
+        if kind == "function_call":
+            args = item.get("arguments")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    args = {}
+            preview = {
+                k: (v[:200] if isinstance(v, str) else v)
+                for k, v in (args or {}).items()
+                if k in ("path", "command", "query", "pattern", "url", "task", "title")
+            }
+            return {
+                "kind": "tool",
+                "name": item.get("name"),
+                "status": item.get("status"),
+                "arguments": preview,
+            }
+        if kind == "reasoning" and not done:
+            return {"kind": "thinking"}
+        if kind == "message":
+            # Providers emit empty message shells between steps; only real text counts.
+            text = "".join(
+                c.get("text") or "" for c in item.get("content") or [] if isinstance(c, dict)
+            )
+            if text.strip():
+                return {"kind": "writing"}
+    return None
+
+
+@router.get("/{chat_id}/subagents")
+async def get_chat_subagents(chat_id: str, request: Request):
+    """Sub-agents this chat delegated to, with live status for each."""
+    from cptr.utils.chat_task import get_active_chat_ids, get_live_state
+
+    user_id = _get_user(request)
+    chat = await Chat.get_by_id(chat_id)
+    if not chat or chat.user_id != user_id:
+        raise HTTPException(404, "chat not found")
+
+    # Sub-agents run outside the task registry, so also treat a reply with
+    # live in-memory state as running.
+    active = get_active_chat_ids()
+    children = [
+        c
+        for c in await Chat.get_internal_descendants(chat_id)
+        if (c.meta or {}).get("parent_chat_id") == chat_id
+        and (c.meta or {}).get("type") == "subagent"
+    ]
+    rows = []
+    for child in sorted(children, key=lambda c: c.created_at or 0):
+        meta = child.meta or {}
+        messages = [_message_dict(m) for m in await ChatMessage.get_all_by_chat(child.id)]
+        brief = next((m for m in messages if m["role"] == "user"), None)
+        reply = next((m for m in reversed(messages) if m["role"] == "assistant"), None)
+        task = meta.get("task")
+        context = meta.get("context") or ""
+        if task is None and brief:
+            task, _, context = str(brief["content"] or "").partition("\n\n## Context\n")
+        running = child.id in active or bool(reply and get_live_state(reply["id"]))
+        if running:
+            status = "running"
+        elif reply and reply["done"]:
+            failed = isinstance(reply.get("meta"), dict) and reply["meta"].get("error")
+            status = "failed" if failed else "done"
+        elif meta.get("delegation_id") and not reply:
+            status = "queued"
+        else:
+            status = "stopped"
+        output = (reply or {}).get("output") or []
+        rows.append(
+            {
+                "chat_id": child.id,
+                "title": child.title,
+                "task": task or "",
+                "context": context or "",
+                "mode": meta.get("mode")
+                or ("background" if meta.get("delegation_id") else "foreground"),
+                "call_id": meta.get("parent_call_id"),
+                "parent_message_id": meta.get("parent_message_id"),
+                "delegation_id": meta.get("delegation_id"),
+                "status": status,
+                "started_at": child.created_at,
+                "updated_at": child.updated_at,
+                "tool_calls": sum(1 for i in output if i.get("type") == "function_call"),
+                "activity": _subagent_activity(output, bool(reply and reply["done"])),
+                "result": ((reply or {}).get("content") or "")[:4000],
+                "model": (reply or {}).get("model"),
+            }
+        )
+    return {"subagents": rows}
+
+
 @router.get("/{chat_id}")
 async def get_chat(
     chat_id: str,

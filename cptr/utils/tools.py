@@ -2515,6 +2515,14 @@ async def delegate_task(
     """
     global _subagent_semaphore
     config = await _get_subagent_config()
+    # Lets the UI tie the sub-agent chat to the tool call that started it.
+    link_meta = {
+        "parent_call_id": __context__.get("call_id"),
+        "parent_message_id": __context__.get("message_id"),
+        "mode": "background" if background else "foreground",
+        "task": task,
+        "context": context,
+    }
 
     if background:
         if not config["background_enabled"]:
@@ -2554,6 +2562,7 @@ async def delegate_task(
                 user_id=__context__["user_id"],
                 parent_chat_id=__context__["chat_id"],
                 delegation_id=delegation_id,
+                extra_meta=link_meta,
             )
         except Exception as e:
             await fail_reserved_subagent(delegation_id, str(e))
@@ -2598,6 +2607,7 @@ async def delegate_task(
             user_id=__context__["user_id"],
             parent_chat_id=__context__["chat_id"],
             config=config,
+            extra_meta=link_meta,
         )
 
     if _subagent_semaphore is None:
@@ -2614,6 +2624,7 @@ async def delegate_task(
             user_id=__context__["user_id"],
             parent_chat_id=__context__["chat_id"],
             config=config,
+            extra_meta=link_meta,
         )
 
 
@@ -2797,6 +2808,7 @@ async def _run_subagent_chat(
     user_id: str,
     parent_chat_id: str,
     config: dict,
+    extra_meta: dict | None = None,
 ) -> str:
     """Create a real chat and run the agent loop on it."""
     chat, _, assistant_msg = await _create_subagent_chat(
@@ -2807,6 +2819,7 @@ async def _run_subagent_chat(
         model=model,
         user_id=user_id,
         parent_chat_id=parent_chat_id,
+        extra_meta=extra_meta,
     )
     return await _run_existing_subagent_chat(
         assistant_msg_id=assistant_msg.id,

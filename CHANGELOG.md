@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.24] - 2026-11-04
+
+### Added
+
+- 🧑‍🤝‍🧑 **See what sub-agents are doing.** Each sub-agent now gets its own card in the chat instead of a single collapsed line. The card shows whether it's queued, working, done, or failed, how long it has been running, and how many steps it has taken. It also shows a live line for its current step, such as "read file: README.md" or "Thinking…".
+- 💬 **See what the main agent and sub-agents tell each other.** Each card shows the task and context the main agent handed over, and the result the sub-agent sent back. Expand a card to watch the sub-agent's own steps and reply live, in the same view as a normal chat.
+- 📋 **Agents panel.** A panel above the message box lists every sub-agent in the chat with its status, current step, and elapsed time. It opens on its own when one starts, and clicking an agent jumps to its card.
+- 🕒 **Agent timeline.** The Agents panel has a timeline view, with one lane for the main agent and one for each sub-agent. It marks when each task was handed off and when each result came back, followed by a time-ordered log of every handoff and result.
+
 ## [0.9.23] - 2026-11-04
 
 ### Fixed

@@ -34,6 +34,8 @@
 		registerToolApprovalShortcutHandler
 	} from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
+	import { trackSubagents } from '$lib/stores/subagents.svelte';
+	import AgentsPanel from './AgentsPanel.svelte';
 	import { onMount, onDestroy, tick } from 'svelte';
 	import { get } from 'svelte/store';
 	import {
@@ -125,6 +127,12 @@
 	let currentMessageId = $state<string | null>(null);
 	let contextUsage = $state<ContextUsage | null>(null);
 	let chatTasks = $state<ChatTask[]>([]);
+
+	// Keep this chat's sub-agent list live for the cards and the Agents panel.
+	$effect(() => {
+		if (!chatId) return;
+		return trackSubagents(chatId);
+	});
 	let showStatusModal = $state(false);
 	let showSkillsModal = $state(false);
 	let skillsModalList = $state<SkillInfo[]>([]);
@@ -1927,6 +1935,7 @@
 						</button>
 					</div>
 				{/if}
+				<AgentsPanel {chatId} />
 				<ChatInput
 					bind:this={chatInputEl}
 					bind:inputText
