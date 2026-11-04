@@ -14,10 +14,12 @@ import {
 	getCoordIntegrations,
 	getCoordMessages,
 	getCoordTasks,
+	getCoordUsage,
 	type CoordConflict,
 	type CoordIntegration,
 	type CoordMessage,
-	type CoordTask
+	type CoordTask,
+	type TaskUsage
 } from '$lib/apis/coordination';
 import { socketStore } from '$lib/stores/socket.svelte';
 
@@ -32,6 +34,8 @@ export interface CoordState {
 	conflicts: CoordConflict[];
 	messages: CoordMessage[];
 	integrations: CoordIntegration[];
+	usage: Record<string, TaskUsage>;
+	usageTotals: TaskUsage | null;
 	activeChats: Set<string>;
 }
 
@@ -60,6 +64,8 @@ function empty(): CoordState {
 		conflicts: [],
 		messages: [],
 		integrations: [],
+		usage: {},
+		usageTotals: null,
 		activeChats: new Set()
 	};
 }
@@ -112,11 +118,12 @@ export async function refresh(root: string): Promise<void> {
 	const seq = ++entry.seq;
 	entry.state.loading = true;
 	try {
-		const [tasks, conflicts, messages, integrations] = await Promise.all([
+		const [tasks, conflicts, messages, integrations, usage] = await Promise.all([
 			getCoordTasks(root),
 			getCoordConflicts(root),
 			getCoordMessages(root),
-			getCoordIntegrations(root)
+			getCoordIntegrations(root),
+			getCoordUsage(root).catch(() => null) // usage is optional; never block the dashboard
 		]);
 		if (seq !== entry.seq) return;
 		entry.state.repoRoot = tasks.repo_root;
@@ -126,6 +133,10 @@ export async function refresh(root: string): Promise<void> {
 		entry.state.conflicts = conflicts.conflicts;
 		entry.state.messages = messages.messages;
 		entry.state.integrations = integrations.integrations;
+		if (usage) {
+			entry.state.usage = usage.tasks;
+			entry.state.usageTotals = usage.totals;
+		}
 		entry.state.error = '';
 		entry.state.notRepo = false;
 	} catch (error: any) {
@@ -207,4 +218,20 @@ export function displayStatus(task: CoordTask): string {
 		return 'awaiting_input';
 	}
 	return task.status;
+}
+
+/** Compact number: 950, 12.3K, 4.5M. */
+export function compactNumber(n: number): string {
+	if (n < 1000) return String(n);
+	if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
+	return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+/** Working time: 45s, 12m, 1h 20m. */
+export function compactDuration(ms: number): string {
+	const s = Math.round(ms / 1000);
+	if (s < 60) return `${s}s`;
+	const m = Math.round(s / 60);
+	if (m < 60) return `${m}m`;
+	return `${Math.floor(m / 60)}h ${m % 60}m`;
 }

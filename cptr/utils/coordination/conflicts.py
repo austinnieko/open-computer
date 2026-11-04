@@ -355,7 +355,7 @@ async def detect(repo_key: str, identity: ExecutionIdentity | None = None) -> li
         task, dep = by_id.get(task_id), all_tasks.get(dep_id)
         if not task or not dep:
             continue
-        if dep.status == "failed":
+        if dep.status in {"failed", "ended"}:
             findings.append(
                 Finding(
                     task_id,

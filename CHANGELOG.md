@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🤝 **Multi-agent coordination.** Several coding agents can now work on the same repository at once without overwriting each other. Each task gets its own branch, its own worktree beside the repo, and an agent chat that runs inside that worktree. Conflicts between tasks are detected from Git, graded info, potential, confirmed or blocking, and shown with their evidence. A blocking conflict pauses only the dependent task, and each affected agent is told on its next turn. Tasks wait for the tasks they depend on, and at most 2 write code at once per repository. Finished branches are merged in dependency order and tested together in a separate integration worktree; if the combined tests fail, the task that broke them is asked for a fix. PRs are published only when you confirm, never duplicated, and never merged for you. Your base branch is never touched.
 - 📋 **Agents & tasks dashboard.** Open it from **+** in any Git workspace to see every task's status, branch, worktree, conflicts, dependencies, test results, messages and PR. From there you can open a task's chat or worktree, view its diff, pause, resume or retry it, run tests, integrate, and publish a PR. **New task** creates the branch, the worktree and the chat in one step.
 - 🏷️ **Task chats say where they run.** A chat that belongs to a task shows a **Task worktree** chip in its header with the task's branch and live status. Click it to open the task in Agents & tasks.
+- 📊 **Usage on the Agents & tasks dashboard.** Each task now shows the tokens, working time, tool calls and files its agent used, including its sub-agents. A row at the top totals every task in the repository.
+- 🧭 **How tasks work, explained in the dashboard.** A short three-step guide covers what a task's folder (worktree) is, where its agent works, and how work is brought together. You can hide it and bring it back. The task folder, the chat chip and the New task form now say the same thing in plain words.
 
 ### Fixed
 
@@ -19,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 📂 **External OpenCode 1.x servers use the chat's folder.** They now receive the chat's directory instead of running in their own startup folder.
 - 🔑 **GitHub sign-in works with older GitHub CLI versions.** The GitHub settings no longer show "unknown flag: --json" with gh releases that lack it, such as the 2.45 package in Ubuntu; your signed-in accounts now show up.
 - 💬 **Tasks waiting for you say so.** A task with no start prompt now shows "Ready – send a message" instead of "Queued", since it starts when you send the first message in its chat.
+- 🛑 **End and delete tasks.** **End task** stops a task's agent and moves the task to Done, keeping its branch, worktree and chat; tasks that depend on it become blocked. A finished task can then be deleted from the dashboard after you confirm. Its branch is always kept, and its folder is removed only if you choose to.
+- 🧭 **Task agents know their task.** On its first turn, a task's agent is told the task's title, description and worktree, so "start working on this" works.
+- 📂 **Task chats on plain models use the task worktree.** File and shell tools in a task chat that uses a model directly now run in the task's worktree, not the main checkout.
 
 ## [0.9.30] - 2026-11-04
 

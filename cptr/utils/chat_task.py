@@ -2073,6 +2073,16 @@ async def run_chat_task(
         api_type = connection.get("api_type", "chat_completions")
 
         chat_obj = await Chat.get_by_id(chat_id)
+        # A coordinated task chat runs its file and shell tools in the task's
+        # worktree, like agent targets do; otherwise in the chat's workspace.
+        tool_workspace = workspace
+        if chat_obj and (chat_obj.meta or {}).get("coord_task_id"):
+            from cptr.utils.coordination.registry import resolve_chat_cwd
+
+            tool_identity = await identity_for_context({"request": request, "user_id": user_id})
+            tool_workspace = (
+                await resolve_chat_cwd(chat_id, chat_obj.meta, tool_identity) or workspace
+            )
         chat_params = (chat_obj.meta or {}).get("params", {}) if chat_obj else {}
         configured_model = (msg.model if msg else None) or model
         try:
@@ -2098,7 +2108,7 @@ async def run_chat_task(
         memory_message, memory_files = _memory_recall_inputs(messages, regeneration_prompt)
         system = await _load_system_prompt(
             request,
-            workspace,
+            tool_workspace,
             model,
             user_id=user_id,
             current_message=memory_message,
@@ -2112,7 +2122,7 @@ async def run_chat_task(
         coord_chat = await Chat.get_by_id(chat_id)
         tools = await get_tool_list(
             builtin_tools=builtin_tools,
-            workspace=workspace,
+            workspace=tool_workspace,
             coordinated=bool(coord_chat and (coord_chat.meta or {}).get("coord_task_id")),
         )
         if not skill_authoring_allowed:
@@ -2327,7 +2337,7 @@ async def run_chat_task(
             return "completed" if processed_any else "idle"
 
         tool_ctx = {
-            "workspace": workspace,
+            "workspace": tool_workspace,
             "user_id": user_id,
             "request": request,
             "model_id": model,
@@ -2399,7 +2409,7 @@ async def run_chat_task(
                 memory_message, memory_files = _memory_recall_inputs(keep_zone, regeneration_prompt)
                 system = await _load_system_prompt(
                     request,
-                    workspace,
+                    tool_workspace,
                     model,
                     user_id=user_id,
                     current_message=memory_message,

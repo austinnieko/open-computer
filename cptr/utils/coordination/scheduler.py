@@ -156,7 +156,9 @@ async def schedule(repo_key: str) -> list[str]:
                     meta={**(task.meta or {}), "error": f"start failed: {exc}"},
                 )
                 continue
-            meta = registry._milestone(task.meta, "started")
+            # Re-read: the turn hook may have written meta (e.g. briefed_at) meanwhile.
+            fresh = await CoordTask.get_by_id(task.id)
+            meta = registry._milestone(fresh.meta if fresh else task.meta, "started")
             meta.pop("start", None)  # never re-launch the same prompt after a restart
             meta["start_prompt"] = start.get("prompt")
             await CoordTask.update_fields(task.id, meta=meta)

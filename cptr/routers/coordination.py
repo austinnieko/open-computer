@@ -87,6 +87,11 @@ class RemoveWorktreeRequest(BaseModel):
     confirm: bool = False
 
 
+class DeleteTaskRequest(BaseModel):
+    confirm: bool = False
+    remove_worktree: bool = False
+
+
 class DependencyRequest(BaseModel):
     depends_on: str
 
@@ -156,17 +161,23 @@ async def task_diff(request: Request, task_id: str):
     return result
 
 
-@router.post("/tasks/{task_id}/pause")
-async def pause_task(request: Request, task_id: str):
-    """Stop the task's running agent turn (if any) and mark it paused."""
+async def _stop_turns(task: CoordTask) -> int:
+    """Cancel the task chat's running agent turns. Returns how many were stopped."""
     from cptr.utils.chat_task import _task_chat, cancel_task, is_running
 
-    task = await _own_task(request, task_id)
     stopped = 0
     if task.chat_id:
         for message_id, chat_id in list(_task_chat.items()):
             if chat_id == task.chat_id and is_running(message_id):
                 stopped += int(await cancel_task(message_id))
+    return stopped
+
+
+@router.post("/tasks/{task_id}/pause")
+async def pause_task(request: Request, task_id: str):
+    """Stop the task's running agent turn (if any) and mark it paused."""
+    task = await _own_task(request, task_id)
+    stopped = await _stop_turns(task)
     if task.status != "paused":
         try:
             await registry.set_status(task.id, "paused", reason="paused by user")
@@ -176,6 +187,65 @@ async def pause_task(request: Request, task_id: str):
     await _emit(task.user_id, result)
     coordinator.request_refresh(task.repo_key)
     return {"task": result, "stopped_turns": stopped}
+
+
+@router.post("/tasks/{task_id}/end")
+async def end_task(request: Request, task_id: str):
+    """Stop the task's agent and mark it ended. Branch, worktree and chat are kept;
+    tasks that depend on it become blocked until the dependency is removed."""
+    task = await _own_task(request, task_id)
+    if task.status == "completed":
+        raise HTTPException(409, "task is already completed")
+    stopped = await _stop_turns(task)
+    if task.status != "ended":
+        try:
+            await registry.set_status(task.id, "ended", reason="ended by user")
+        except registry.CoordinationError as exc:
+            raise HTTPException(409, str(exc)) from exc
+    result = (await CoordTask.get_by_id(task.id)).to_dict()
+    await _emit(task.user_id, result)
+    coordinator.request_refresh(task.repo_key)
+    return {"task": result, "stopped_turns": stopped}
+
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(request: Request, task_id: str, body: DeleteTaskRequest):
+    """Delete a finished task's record. Requires ``confirm: true`` from the user.
+
+    The branch and its commits are always kept. The worktree folder is removed
+    only with ``remove_worktree: true`` (refused if it has uncommitted changes).
+    The chat stays as an ordinary chat.
+    """
+    task = await _own_task(request, task_id)
+    if not body.confirm:
+        raise HTTPException(409, "Deleting a task requires explicit user approval")
+    if task.status not in {"ended", "completed", "failed"}:
+        raise HTTPException(409, f"task is {task.status}; end it first")
+    removed_worktree = False
+    if body.remove_worktree and task.worktree_path:
+        _, identity = await _identity(request, task.repo_root)
+        try:
+            await wt.remove_worktree(
+                wt.RepoIdentity(task.repo_key, task.repo_root),
+                task.worktree_path,
+                user_confirmed=True,
+                identity=identity,
+            )
+        except wt.WorktreeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        removed_worktree = True
+    if task.chat_id:
+        chat = await Chat.get_by_id(task.chat_id)
+        if chat and (chat.meta or {}).get("coord_task_id") == task.id:
+            meta = dict(chat.meta or {})
+            meta.pop("coord_task_id", None)
+            if removed_worktree or meta.get("cwd") == task.worktree_path:
+                meta.pop("cwd", None)  # back to the workspace folder
+            await Chat.update_meta(chat.id, meta, now_ms())
+    await CoordTask.delete_with_records(task.id)
+    await emit_to_user(task.user_id, {"type": "coord:task_deleted", "task_id": task.id})
+    coordinator.request_refresh(task.repo_key)
+    return {"ok": True, "branch_kept": task.branch, "worktree_removed": removed_worktree}
 
 
 @router.post("/tasks/{task_id}/resume")
@@ -295,7 +365,7 @@ async def remove_worktree(request: Request, task_id: str, body: RemoveWorktreeRe
     task = await _own_task(request, task_id)
     if not task.worktree_path:
         raise HTTPException(400, "task has no worktree")
-    if task.status not in {"completed", "failed", "paused", "blocked"}:
+    if task.status not in {"completed", "failed", "ended", "paused", "blocked"}:
         raise HTTPException(409, f"task is {task.status}; pause or finish it first")
     _, identity = await _identity(request, task.repo_root)
     try:
@@ -346,6 +416,46 @@ async def remove_dependency(request: Request, task_id: str, depends_on: str):
     removed = await scheduler.remove_dependency(task.id, depends_on)
     coordinator.request_refresh(task.repo_key)
     return {"removed": removed}
+
+
+@router.get("/usage")
+async def list_usage(request: Request, root: str):
+    """Per-task agent usage (tokens, cost, working time, tool calls, turns, files)
+    plus repository totals, from each task chat and its sub-agent chats."""
+    from cptr.models.chats import ChatMessage
+    from cptr.routers.chat import _tally_messages
+
+    repo_key = await _repo_key(request, root)
+    tasks = await CoordTask.query(user_id=_user_id(request), repo_key=repo_key)
+    keys = ("tokens", "cost_usd", "duration_ms", "tool_calls", "turns", "files")
+    totals = dict.fromkeys(keys, 0)
+    per_task: dict[str, dict] = {}
+    for task in tasks:
+        usage = dict.fromkeys(keys, 0)
+        # Declared files plus the ones Git shows changed in its worktree.
+        usage["files"] = len(
+            set(task.files or []) | set((task.meta or {}).get("observed_files") or [])
+        )
+        if task.chat_id:
+            chat_ids = [task.chat_id] + [
+                c.id
+                for c in await Chat.get_internal_descendants(task.chat_id)
+                if (c.meta or {}).get("type") == "subagent"
+            ]
+            for chat_id in chat_ids:
+                stats = _tally_messages(await ChatMessage.get_all_by_chat(chat_id))
+                usage["tokens"] += stats["totals"]["total"]
+                usage["cost_usd"] += stats["totals"]["cost_usd"]
+                usage["duration_ms"] += stats["totals"]["duration_ms"]
+                usage["tool_calls"] += sum(t["count"] for t in stats["tools"])
+                if chat_id == task.chat_id:
+                    usage["turns"] = len(stats["turns"])
+        usage["cost_usd"] = round(usage["cost_usd"], 6)
+        per_task[task.id] = usage
+        for key in keys:
+            totals[key] += usage[key]
+    totals["cost_usd"] = round(totals["cost_usd"], 6)
+    return {"tasks": per_task, "totals": totals}
 
 
 @router.get("/conflicts")

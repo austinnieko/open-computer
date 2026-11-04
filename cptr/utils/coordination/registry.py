@@ -37,14 +37,23 @@ _repo_locks: dict[str, asyncio.Lock] = {}
 
 # Allowed status transitions. Anything else is rejected.
 _TRANSITIONS: dict[str, set[str]] = {
-    "queued": {"running", "blocked", "paused", "failed"},
-    "running": {"blocked", "paused", "reviewing", "integration_ready", "failed", "completed"},
-    "blocked": {"queued", "running", "paused", "failed"},
-    "paused": {"queued", "running", "blocked", "failed"},
-    "reviewing": {"running", "blocked", "integration_ready", "failed"},
-    "integration_ready": {"running", "reviewing", "blocked", "completed", "failed"},
-    "failed": {"queued"},  # explicit retry
+    "queued": {"running", "blocked", "paused", "failed", "ended"},
+    "running": {
+        "blocked",
+        "paused",
+        "reviewing",
+        "integration_ready",
+        "failed",
+        "completed",
+        "ended",
+    },
+    "blocked": {"queued", "running", "paused", "failed", "ended"},
+    "paused": {"queued", "running", "blocked", "failed", "ended"},
+    "reviewing": {"running", "blocked", "integration_ready", "failed", "ended"},
+    "integration_ready": {"running", "reviewing", "blocked", "completed", "failed", "ended"},
+    "failed": {"queued", "ended"},  # explicit retry, or give up
     "completed": set(),
+    "ended": set(),  # ended by the user; can only be deleted
 }
 
 
