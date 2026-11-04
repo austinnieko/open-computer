@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.31] - 2026-11-04
+
+### Added
+
+- 🤝 **Multi-agent coordination.** Several coding agents can now work on the same repository at once without overwriting each other. Each task gets its own branch, its own worktree beside the repo, and an agent chat that runs inside that worktree. Conflicts between tasks are detected from Git, graded info, potential, confirmed or blocking, and shown with their evidence. A blocking conflict pauses only the dependent task, and each affected agent is told on its next turn. Tasks wait for the tasks they depend on, and at most 2 write code at once per repository. Finished branches are merged in dependency order and tested together in a separate integration worktree; if the combined tests fail, the task that broke them is asked for a fix. PRs are published only when you confirm, never duplicated, and never merged for you. Your base branch is never touched.
+- 📋 **Agents & tasks dashboard.** Open it from **+** in any Git workspace to see every task's status, branch, worktree, conflicts, dependencies, test results, messages and PR. From there you can open a task's chat or worktree, view its diff, pause, resume or retry it, run tests, integrate, and publish a PR. **New task** creates the branch, the worktree and the chat in one step.
+- 🏷️ **Task chats say where they run.** A chat that belongs to a task shows a **Task worktree** chip in its header with the task's branch and live status. Click it to open the task in Agents & tasks.
+
+### Fixed
+
+- 📂 **Resumed agent sessions stay in the right folder.** Resuming a coding-agent session no longer reopens a session that was started in a different folder.
+- 📂 **External OpenCode 1.x servers use the chat's folder.** They now receive the chat's directory instead of running in their own startup folder.
+
 ## [0.9.30] - 2026-11-04
 
 ### Changed

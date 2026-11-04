@@ -18,6 +18,18 @@ Use it from your phone, tablet, laptop, another computer, or the machine it's ru
 
 > Start here: [Open WebUI Computer docs](https://docs.openwebui.com/ecosystem/computer/)
 
+## What's new in this fork
+
+Recent additions on top of upstream `open-webui/computer` (0.9.22 → 0.9.31, November 3–4, 2026). Full details are in the [changelog](./CHANGELOG.md).
+
+- 🤝 **[Multi-agent coordination](#multi-agent-coordination).** Several coding agents can work on the same repository at once. Each task gets its own branch and worktree. Conflicts are detected from Git, dependencies are respected, finished branches are tested together before you publish PRs, and you merge them yourself. *(0.9.31)*
+- 🧑‍💻 **OpenCode 2.x support.** OpenCode 2.x works as a coding agent, with clean streaming, visible permission requests, and clear connection errors. Tokens and cost are now recorded as well. *(0.9.23, 0.9.30)*
+- 🧑‍🤝‍🧑 **See what sub-agents are doing.** Each sub-agent gets a live card in the chat, there's an Agents panel with a handoff timeline, and agents appear in the sidebar as a workspace › chat › agents tree. *(0.9.24, 0.9.27)*
+- 📝 **Every code change visible.** When any agent edits a file, including OpenCode and Claude Code, the chat shows a diff card. Turn on Follow edits to open each edited file live, as a per-chat setting. *(0.9.25, 0.9.26)*
+- 🗂️ **Chats live in the sidebar.** Several chats can be open at once, they get proper names as soon as a turn starts, and you can open one beside another. *(0.9.28–0.9.30)*
+- 📊 **Stats beside every chat.** Tokens (including sub-agents), cost, context fill and timing. *(0.9.30)*
+- 🛠️ **Fixes for local models.** Tool calls from Ollama, llama.cpp, vLLM and LM Studio are no longer dropped, and tool calls with missing details no longer crash the chat. *(0.9.22)*
+
 ## Install
 
 ```bash
@@ -111,6 +123,44 @@ Use the subscriptions you already pay for as native backends on your own machine
 Add an agent profile from Settings, pick your models, and it shows up in the model selector like any other provider. Conversations run inside your workspace with full tool access and resume where you left off.
 
 Prefer to run agents yourself? Any terminal agent (Kilo Code, Pi, and others) works in the terminal tab the way it always has.
+
+## Multi-agent coordination
+
+Run several coding agents on one repository without them overwriting each other. Open Computer stays the frontend and OpenCode (or another coding agent) stays the backend. Coordination adds shared task state, isolation, conflict detection and safe integration.
+
+![Agents & tasks dashboard](./docs/images/coordination-dashboard-task-list.png)
+
+**How to use it**
+
+1. Open a Git repository as a workspace, click **+** in the tab bar and choose **Agents & tasks**.
+2. Click **New task**, one per ticket. Give it a title, paste the ticket text into the instructions, pick a model and, if the ticket needs another one finished first, tick **Depends on**.
+3. **Create task** makes a branch, a dedicated worktree under `.cptr-worktrees/<repo>/` next to your repo, and an agent chat that runs inside that worktree.
+4. Use **Open chat** to talk to that task's agent. The chat header shows a **Task worktree** chip with the branch and live status, so you always know where the agent is working.
+5. When a task is done: **Mark ready for review** → **Run tests** → **Integrate** → **Publish PR**. You merge the PR yourself.
+
+![A task's page: actions, dependencies and a detected conflict](./docs/images/coordination-task-detail-dependent-task.png)
+
+**What it does for you**
+
+| | |
+|---|---|
+| 🌳 **Isolation** | Every task has its own branch and worktree. Agents never write into the same checkout, and a branch, worktree or chat can belong to only one task. |
+| 🔍 **Conflict detection** | Evidence comes from Git, with no AI guessing: same files, shared config, lockfiles, parallel migrations, public functions changed and used by another task, mismatched dependency versions, and branches that won't merge (`git merge-tree`). Conflicts are graded *info → potential → confirmed → blocking*. |
+| ⏸️ **Pauses only what it must** | A blocking conflict holds only the dependent task. Unrelated agents keep working. |
+| 💬 **Agents keep each other informed** | Structured notes ("I changed the detection API", "we both edit settings.toml") go to the affected agents only, at the start of their next turn. |
+| 🧭 **Dependencies** | Tasks wait for their prerequisites to pass integration. Circular dependencies are rejected. At most 2 tasks write code at once per repository (`coordination.max_writers`). |
+| 🧪 **Safe integration** | Finished branches are merged in dependency order into a separate `coord/integration-<run>` worktree and tested together. If the combined tests fail, the first task that broke them is identified and asked for a fix. Your base branch is never touched. |
+| 🔁 **Survives restarts** | Tasks, claims, conflicts and messages are stored in the database. After a restart, the coordinator checks them against live chats and worktrees, and doesn't repeat work or create duplicate PRs. |
+| 🔒 **You stay in control** | Publishing a PR and removing a worktree ask for confirmation. Worktrees with uncommitted changes are never deleted. The coordinator has no way to merge a PR. |
+
+![New task form: one ticket per task, with dependencies](./docs/images/coordination-new-task-form.png)
+
+**Good to know**
+
+- **Grouping is per repository:** tasks in the same repo, including its worktrees, coordinate with each other. A different repo is a separate group with its own limits.
+- **One task per ticket:** a task is one agent on one branch. Several tickets in one task are done one after another in a single PR, so give each ticket its own task.
+- **Test commands:** set `coordination.test_command` (and optionally `coordination.targeted_test_command`, where `{files}` becomes the task's changed files), or set one per task in the form.
+- **Agents can't read private ticket links:** an agent can only open a ticket link it has access to, so paste the ticket's text when in doubt.
 
 ## Messaging bots
 

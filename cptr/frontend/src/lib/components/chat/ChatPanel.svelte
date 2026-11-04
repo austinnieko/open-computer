@@ -37,6 +37,7 @@
 	import { trackSubagents } from '$lib/stores/subagents.svelte';
 	import { setFollowEdits, watchChatEdits } from '$lib/stores/followEdits.svelte';
 	import AgentsPanel from './AgentsPanel.svelte';
+	import TaskChatBanner from './TaskChatBanner.svelte';
 	import ChatStatsPanel from './ChatStatsPanel.svelte';
 	import { chatStatsOn } from '$lib/stores/chatStats';
 	import { onMount, onDestroy, tick, untrack } from 'svelte';
@@ -161,6 +162,9 @@
 	let cancelledMessageId: string | null = null;
 	let loading = $state(!!initialChatId);
 	let chatTitle = $state('');
+	/** Coordinated task this chat belongs to (runs in the task's worktree). */
+	let coordTaskId = $state<string | null>(null);
+	let coordTaskChatId = $state<string | null>(null);
 	let ttsQueue: string[] = [];
 	let ttsBuffer = '';
 	let ttsInsideCodeFence = false;
@@ -463,6 +467,9 @@
 			if (gen !== loadGeneration) return;
 			allMessages = data.messages;
 			loadChatSettings(data.chat.meta);
+			coordTaskId =
+				typeof data.chat.meta?.coord_task_id === 'string' ? data.chat.meta.coord_task_id : null;
+			coordTaskChatId = id;
 			currentMessageId = data.chat.current_message_id;
 			contextUsage = data.context_usage ?? null;
 			setChatTasks(
@@ -1799,10 +1806,17 @@
 				style="background: linear-gradient(to bottom, var(--app-bg), color-mix(in oklab, var(--app-bg) 95%, transparent) 40%, transparent 97%);"
 			></div>
 			<div
-				class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-gray-600 dark:text-gray-400"
+				class="min-w-0 truncate text-[0.6875rem] font-medium text-gray-600 dark:text-gray-400 {coordTaskId &&
+				coordTaskChatId === chatId
+					? 'shrink'
+					: 'flex-1'}"
 			>
 				{displayChatTitle}
 			</div>
+			{#if coordTaskId && coordTaskChatId === chatId}
+				<TaskChatBanner taskId={coordTaskId} />
+				<div class="flex-1"></div>
+			{/if}
 			<div class="flex shrink-0 items-center gap-0.5">
 				{#if chatId && !chatId.startsWith('new-')}
 					<button
