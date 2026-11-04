@@ -12,6 +12,7 @@ from cptr.routers import (
     audio_router,
     auth_router,
     automations_router,
+    coordination_router,
     bridge_router,
     browser_router,
     webhook_router,
@@ -61,6 +62,21 @@ async def lifespan(app: FastAPI):
         from cptr.utils.chat_task import reconcile_chat_state
 
         await reconcile_chat_state()
+
+    # Reconcile multi-agent task records against live chats and worktrees.
+    try:
+        from cptr.utils.chat_task import get_active_chat_ids
+        from cptr.utils.coordination.registry import reconcile as reconcile_coordination
+        from cptr.utils.identity import identity_for_user_id
+
+        await reconcile_coordination(
+            active_chat_ids=get_active_chat_ids(), identity_for_user=identity_for_user_id
+        )
+        from cptr.utils.coordination.integration import reconcile as reconcile_integrations
+
+        await reconcile_integrations()
+    except Exception:
+        _logging.getLogger(__name__).exception("coordination reconcile failed")
 
     from cptr.routers.chat import warm_model_cache
 
@@ -280,6 +296,7 @@ app.include_router(admin_router)
 app.include_router(audio_router)
 app.include_router(auth_router)
 app.include_router(automations_router)
+app.include_router(coordination_router)
 app.include_router(bridge_router)
 app.include_router(browser_router)
 app.include_router(webhook_router)

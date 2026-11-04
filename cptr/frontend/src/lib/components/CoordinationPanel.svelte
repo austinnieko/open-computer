@@ -1,0 +1,1130 @@
+<script lang="ts">
+	/**
+	 * Multi-agent coordination dashboard: tasks, worktrees, dependencies,
+	 * conflicts, messages, integration runs and PRs for the current repository.
+	 * Shows only real runtime state (statuses, files, test results), never
+	 * estimated progress.
+	 */
+	import { goto } from '$app/navigation';
+	import { t } from '$lib/i18n';
+	import { toast } from 'svelte-sonner';
+	import { tooltip } from '$lib/tooltip';
+	import Icon from './Icon.svelte';
+	import Modal from './Modal.svelte';
+	import Spinner from './common/Spinner.svelte';
+	import ModelSelector from './common/ModelSelector.svelte';
+	import DiffHunkList from './DiffHunkList.svelte';
+	import { addWorkspace, openChatTab } from '$lib/stores';
+	import { requestConfirm } from '$lib/stores/confirm';
+	import {
+		addCoordDependency,
+		getCoordTaskDiff,
+		getCoordTaskReadiness,
+		pauseCoordTask,
+		publishCoordPr,
+		registerCoordTask,
+		removeCoordWorktree,
+		requestCoordCorrection,
+		requestCoordIntegration,
+		resumeCoordTask,
+		scanCoordination,
+		sendCoordMessage,
+		setCoordConflictStatus,
+		setCoordTaskStatus,
+		validateCoordTask,
+		type CoordConflict,
+		type CoordTask,
+		type TaskStatus
+	} from '$lib/apis/coordination';
+	import {
+		coordinationOf,
+		levelRank,
+		refresh,
+		trackCoordination,
+		worstConflict
+	} from '$lib/stores/coordination.svelte';
+	import type { DiffFile } from '$lib/utils/diff';
+
+	interface Props {
+		workspace: string;
+	}
+	let { workspace }: Props = $props();
+
+	// The prop is re-read whenever the workspace store emits (e.g. on every pane
+	// click); $derived memoises the string so tracking only restarts on a real change.
+	const root = $derived(workspace);
+
+	$effect(() => {
+		const release = trackCoordination(root);
+		return release;
+	});
+
+	const coord = $derived(coordinationOf(root));
+	let selectedId = $state<string | null>(null);
+	let showDone = $state(false);
+	let busy = $state<string | null>(null);
+	let showNewTask = $state(false);
+	let diffFor = $state<string | null>(null);
+	let diffFiles = $state<DiffFile[]>([]);
+	let diffUntracked = $state<string[]>([]);
+	let diffLoading = $state(false);
+	let readiness = $state<{ ready: boolean; reasons: string[] } | null>(null);
+	let note = $state('');
+
+	const byId = $derived(new Map(coord.tasks.map((task) => [task.id, task])));
+	const selected = $derived(selectedId ? (byId.get(selectedId) ?? null) : null);
+
+	const GROUPS: { key: string; statuses: TaskStatus[] }[] = [
+		{ key: 'running', statuses: ['running'] },
+		{ key: 'attention', statuses: ['blocked', 'failed'] },
+		{ key: 'waiting', statuses: ['queued', 'paused'] },
+		{ key: 'review', statuses: ['reviewing', 'integration_ready'] },
+		{ key: 'done', statuses: ['completed'] }
+	];
+
+	const grouped = $derived(
+		GROUPS.map((group) => ({
+			...group,
+			tasks: coord.tasks.filter((task) => group.statuses.includes(task.status))
+		})).filter((group) => group.tasks.length > 0)
+	);
+
+	const openConflicts = $derived(coord.conflicts.filter((c) => c.status !== 'resolved'));
+	const counts = $derived({
+		running: coord.tasks.filter((task) => task.status === 'running').length,
+		active: coord.activeChats.size,
+		blocked: coord.tasks.filter((task) => task.status === 'blocked').length,
+		conflicts: openConflicts.filter((c) => levelRank(c.level) >= 1).length,
+		ready: coord.tasks.filter((task) => task.status === 'reviewing').length
+	});
+
+	const STATUS_CLASS: Record<string, string> = {
+		queued: 'bg-gray-100 text-gray-600 dark:bg-white/8 dark:text-gray-300',
+		running: 'bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300',
+		blocked: 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300',
+		paused: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
+		reviewing: 'bg-violet-50 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300',
+		integration_ready:
+			'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
+		completed: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400',
+		failed: 'bg-red-100 text-red-800 dark:bg-red-500/25 dark:text-red-200'
+	};
+	const LEVEL_CLASS: Record<string, string> = {
+		info: 'text-gray-500 dark:text-gray-400',
+		potential: 'text-amber-600 dark:text-amber-400',
+		confirmed: 'text-orange-600 dark:text-orange-400',
+		blocking: 'text-red-600 dark:text-red-400'
+	};
+
+	function statusLabel(status: string): string {
+		return $t(`coordination.status.${status}`);
+	}
+
+	function titleOf(id: string | null): string {
+		if (!id) return $t('coordination.baseBranch');
+		return byId.get(id)?.title ?? id;
+	}
+
+	// Re-render relative times; cheap and local (no network).
+	let now = $state(Date.now());
+	$effect(() => {
+		const timer = setInterval(() => (now = Date.now()), 30_000);
+		return () => clearInterval(timer);
+	});
+
+	function relTime(ms: number | null | undefined): string {
+		if (!ms) return '';
+		const seconds = Math.max(0, Math.round((now - ms) / 1000));
+		if (seconds < 60) return $t('coordination.secondsAgo', { count: seconds });
+		if (seconds < 3600) return $t('coordination.minutesAgo', { count: Math.round(seconds / 60) });
+		if (seconds < 86400) return $t('coordination.hoursAgo', { count: Math.round(seconds / 3600) });
+		return new Date(ms).toLocaleDateString();
+	}
+
+	function dependsOn(id: string): CoordTask[] {
+		return coord.dependencies
+			.filter((d) => d.task_id === id)
+			.map((d) => byId.get(d.depends_on))
+			.filter((task): task is CoordTask => !!task);
+	}
+
+	function requiredBy(id: string): CoordTask[] {
+		return coord.dependencies
+			.filter((d) => d.depends_on === id)
+			.map((d) => byId.get(d.task_id))
+			.filter((task): task is CoordTask => !!task);
+	}
+
+	function conflictsOf(id: string): CoordConflict[] {
+		return openConflicts
+			.filter((c) => c.task_a === id || c.task_b === id)
+			.sort((a, b) => levelRank(b.level) - levelRank(a.level));
+	}
+
+	function changedFiles(task: CoordTask): string[] {
+		return (task.meta.observed_files as string[] | undefined) ?? task.files ?? [];
+	}
+
+	async function run(key: string, fn: () => Promise<unknown>, success?: string) {
+		busy = key;
+		try {
+			await fn();
+			if (success) toast.success(success);
+		} catch (error: any) {
+			toast.error(error?.message ?? String(error));
+		} finally {
+			busy = null;
+			await refresh(root);
+		}
+	}
+
+	function select(id: string) {
+		selectedId = id;
+		diffFor = null;
+		readiness = null;
+		note = '';
+	}
+
+	async function loadDiff(task: CoordTask) {
+		if (diffFor === task.id) {
+			diffFor = null;
+			return;
+		}
+		diffFor = task.id;
+		diffLoading = true;
+		try {
+			const result = await getCoordTaskDiff(task.id);
+			diffFiles = result.files ?? [];
+			diffUntracked = result.untracked ?? [];
+		} catch (error: any) {
+			toast.error(error?.message ?? String(error));
+			diffFor = null;
+		} finally {
+			diffLoading = false;
+		}
+	}
+
+	async function checkReadiness(task: CoordTask) {
+		readiness = await getCoordTaskReadiness(task.id).catch(() => null);
+	}
+
+	async function openWorktree(task: CoordTask) {
+		if (!task.worktree_path) return;
+		addWorkspace(task.worktree_path);
+		await goto(`/?workspace=${encodeURIComponent(task.worktree_path)}`);
+	}
+
+	async function publish(task: CoordTask) {
+		const ok = await requestConfirm({
+			title: $t('coordination.publishTitle'),
+			message: $t('coordination.publishMessage', { branch: task.branch ?? '' }),
+			confirmLabel: $t('coordination.publish')
+		});
+		if (ok) await run(`pr:${task.id}`, () => publishCoordPr(task.id), $t('coordination.published'));
+	}
+
+	async function removeWorktree(task: CoordTask) {
+		const ok = await requestConfirm({
+			title: $t('coordination.removeWorktreeTitle'),
+			message: $t('coordination.removeWorktreeMessage', { path: task.worktree_path ?? '' }),
+			confirmLabel: $t('coordination.removeWorktree')
+		});
+		if (ok) await run(`rm:${task.id}`, () => removeCoordWorktree(task.id));
+	}
+
+	async function integrate() {
+		const ok = await requestConfirm({
+			title: $t('coordination.integrateTitle'),
+			message: $t('coordination.integrateMessage'),
+			confirmLabel: $t('coordination.integrate')
+		});
+		if (!ok) return;
+		await run('integrate', async () => {
+			const result = await requestCoordIntegration(root);
+			if (result.status === 'running') toast.success($t('coordination.integrationStarted'));
+			else toast.error(result.summary ?? $t('coordination.run.failed'));
+		});
+	}
+
+	// ── New task form ────────────────────────────────
+	let form = $state({
+		title: '',
+		description: '',
+		startPrompt: '',
+		testCommand: '',
+		dependsOn: [] as string[],
+		model: null as string | null
+	});
+
+	function resetForm() {
+		form = {
+			title: '',
+			description: '',
+			startPrompt: '',
+			testCommand: '',
+			dependsOn: [],
+			model: null
+		};
+	}
+
+	async function createTask() {
+		if (!form.title.trim()) return;
+		if (form.startPrompt.trim() && !form.model) {
+			toast.error($t('coordination.modelRequired'));
+			return;
+		}
+		await run('create', async () => {
+			const result = await registerCoordTask({
+				root,
+				title: form.title.trim(),
+				description: form.description.trim() || undefined,
+				depends_on: form.dependsOn,
+				create_chat: true,
+				start_prompt: form.startPrompt.trim() || undefined,
+				model_id: form.model ?? undefined,
+				test_command: form.testCommand.trim() || undefined
+			});
+			if (result.worktree?.error) toast.error(result.worktree.error);
+			selectedId = result.task.id;
+			showNewTask = false;
+			resetForm();
+		});
+	}
+</script>
+
+<div class="coordination flex h-full min-h-0 flex-col text-sm">
+	<!-- Header -->
+	<div
+		class="flex flex-wrap items-center gap-2 border-b border-gray-100 px-3 py-2 dark:border-white/6"
+	>
+		<div class="flex min-w-0 items-center gap-2">
+			<Icon name="list" size={16} class="shrink-0 text-gray-500" />
+			<span class="truncate font-medium text-gray-800 dark:text-gray-100">
+				{$t('coordination.title')}
+			</span>
+			{#if coord.loading}<Spinner size={12} />{/if}
+		</div>
+		<div
+			class="flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-gray-500 dark:text-gray-400"
+		>
+			<span use:tooltip={$t('coordination.runningHint')}>
+				{$t('coordination.countRunning', { count: counts.running })}
+				{#if counts.active}· {$t('coordination.countActive', { count: counts.active })}{/if}
+			</span>
+			{#if counts.blocked}
+				<span class="text-red-600 dark:text-red-400">
+					· {$t('coordination.countBlocked', { count: counts.blocked })}
+				</span>
+			{/if}
+			{#if counts.conflicts}
+				<span class="text-amber-600 dark:text-amber-400">
+					· {$t('coordination.countConflicts', { count: counts.conflicts })}
+				</span>
+			{/if}
+		</div>
+		<div class="ml-auto flex items-center gap-1">
+			<button
+				class="icon-btn"
+				use:tooltip={$t('coordination.scan')}
+				aria-label={$t('coordination.scan')}
+				disabled={busy === 'scan' || !coord.tasks.length}
+				onclick={() => run('scan', () => scanCoordination(root))}
+			>
+				<Icon name="refresh" size={14} />
+			</button>
+			<button
+				class="btn-secondary"
+				disabled={busy === 'integrate' || !counts.ready}
+				onclick={integrate}
+				use:tooltip={$t('coordination.integrateHint')}
+			>
+				<Icon name="git-branch" size={13} />
+				<span class="hidden sm:inline">{$t('coordination.integrate')}</span>
+			</button>
+			<button class="btn-primary" disabled={coord.notRepo} onclick={() => (showNewTask = true)}>
+				<Icon name="plus" size={13} />
+				<span class="hidden sm:inline">{$t('coordination.newTask')}</span>
+			</button>
+		</div>
+	</div>
+
+	{#if coord.notRepo}
+		<div class="empty">{$t('coordination.notRepo')}</div>
+	{:else if coord.error}
+		<div class="empty text-red-600 dark:text-red-400">{coord.error}</div>
+	{:else if coord.loaded && !coord.tasks.length}
+		<div class="empty">
+			<p>{$t('coordination.empty')}</p>
+			<button class="btn-primary mt-3" onclick={() => (showNewTask = true)}>
+				<Icon name="plus" size={13} />{$t('coordination.newTask')}
+			</button>
+		</div>
+	{:else}
+		<div class="grid min-h-0 flex-1 md:grid-cols-[minmax(15rem,20rem)_1fr]">
+			<!-- Task list -->
+			<div
+				class="min-h-0 overflow-y-auto border-gray-100 md:border-r dark:border-white/6 {selected
+					? 'hidden md:block'
+					: 'block'}"
+			>
+				{#each grouped as group (group.key)}
+					{#if group.key !== 'done' || showDone}
+						<div class="section-label">
+							{$t(`coordination.group.${group.key}`)} · {group.tasks.length}
+						</div>
+						{#each group.tasks as task (task.id)}
+							{@const worst = worstConflict(openConflicts, task.id)}
+							<button
+								class="task-row"
+								class:task-row-selected={task.id === selectedId}
+								onclick={() => select(task.id)}
+							>
+								<div class="flex min-w-0 items-center gap-1.5">
+									{#if task.chat_id && coord.activeChats.has(task.chat_id)}
+										<span
+											class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-blue-500"
+											use:tooltip={$t('coordination.agentWorking')}
+										></span>
+									{/if}
+									<span class="truncate font-medium text-gray-800 dark:text-gray-100">
+										{task.title}
+									</span>
+									{#if worst && levelRank(worst.level) >= 1}
+										<span
+											class="ml-auto shrink-0 text-[0.625rem] font-semibold uppercase {LEVEL_CLASS[
+												worst.level
+											]}"
+											use:tooltip={$t(`coordination.kind.${worst.kind}`)}
+										>
+											{$t(`coordination.level.${worst.level}`)}
+										</span>
+									{/if}
+								</div>
+								<div
+									class="mt-0.5 flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-gray-500 dark:text-gray-400"
+								>
+									<span class="pill {STATUS_CLASS[task.status]}">{statusLabel(task.status)}</span>
+									{#if task.branch}<span class="truncate font-mono">{task.branch}</span>{/if}
+									{#if task.pr_number}
+										<span class="shrink-0">#{task.pr_number}</span>
+									{/if}
+								</div>
+							</button>
+						{/each}
+					{/if}
+				{/each}
+				{#if grouped.some((g) => g.key === 'done')}
+					<button class="section-toggle" onclick={() => (showDone = !showDone)}>
+						{showDone ? $t('coordination.hideDone') : $t('coordination.showDone')}
+					</button>
+				{/if}
+
+				{#if coord.integrations.length}
+					<div class="section-label mt-2">{$t('coordination.integrations')}</div>
+					{#each coord.integrations.slice(0, 5) as runItem (runItem.id)}
+						<details class="px-3 py-1.5 text-[0.6875rem] text-gray-600 dark:text-gray-300">
+							<summary class="cursor-pointer">
+								<span
+									class={runItem.status === 'passed'
+										? 'text-emerald-600 dark:text-emerald-400'
+										: runItem.status === 'running'
+											? 'text-blue-600 dark:text-blue-400'
+											: 'text-red-600 dark:text-red-400'}
+								>
+									{$t(`coordination.run.${runItem.status}`)}
+								</span>
+								· {relTime(runItem.created_at)}
+							</summary>
+							<p class="mt-1 text-gray-500 dark:text-gray-400">{runItem.summary ?? ''}</p>
+							{#if runItem.branch}<p class="font-mono">{runItem.branch}</p>{/if}
+							<ol class="mt-1 space-y-0.5">
+								{#each runItem.steps as step}
+									<li>
+										<span class="font-medium">{titleOf(step.task_id)}</span>:
+										{$t(`coordination.step.${step.result}`)}
+										{#if step.files?.length}({step.files.join(', ')}){/if}
+										{#if step.reasons?.length}— {step.reasons.join('; ')}{/if}
+										{#if step.note}— {step.note}{/if}
+									</li>
+								{/each}
+							</ol>
+							{#if runItem.tests}
+								<p class="mt-1">
+									{$t('coordination.tests')}: {runItem.tests.passed
+										? $t('coordination.passed')
+										: $t('coordination.failed')}
+									{#if runItem.tests.attributed_to}
+										— {$t('coordination.firstFailing')}: {titleOf(runItem.tests.attributed_to)}
+									{/if}
+								</p>
+							{/if}
+						</details>
+					{/each}
+				{/if}
+			</div>
+
+			<!-- Detail -->
+			<div class="min-h-0 overflow-y-auto {selected ? 'block' : 'hidden md:block'}">
+				{#if !selected}
+					<div class="empty">{$t('coordination.selectTask')}</div>
+				{:else}
+					{@const task = selected}
+					<div class="space-y-4 p-3 sm:p-4">
+						<div>
+							<button
+								class="mb-2 flex items-center gap-1 text-xs text-gray-500 md:hidden"
+								onclick={() => (selectedId = null)}
+							>
+								<Icon name="chevron-left" size={12} />{$t('coordination.back')}
+							</button>
+							<div class="flex flex-wrap items-center gap-2">
+								<h2 class="min-w-0 text-base font-semibold text-gray-900 dark:text-gray-50">
+									{task.title}
+								</h2>
+								<span class="pill {STATUS_CLASS[task.status]}">{statusLabel(task.status)}</span>
+								{#if task.chat_id && coord.activeChats.has(task.chat_id)}
+									<span
+										class="flex items-center gap-1 text-[0.6875rem] text-blue-600 dark:text-blue-400"
+									>
+										<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500"></span>
+										{$t('coordination.agentWorking')}
+									</span>
+								{/if}
+							</div>
+							{#if task.description}
+								<p class="mt-1 whitespace-pre-wrap text-gray-600 dark:text-gray-300">
+									{task.description}
+								</p>
+							{/if}
+							{#if task.meta.status_reason}
+								<p class="mt-1 text-xs text-gray-500">{task.meta.status_reason}</p>
+							{/if}
+						</div>
+
+						<!-- Actions -->
+						<div class="flex flex-wrap gap-1.5">
+							{#if task.chat_id}
+								<button class="btn-secondary" onclick={() => openChatTab(task.chat_id!)}>
+									<Icon name="chat-bubble" size={13} />{$t('coordination.openChat')}
+								</button>
+							{/if}
+							{#if task.worktree_path}
+								<button class="btn-secondary" onclick={() => openWorktree(task)}>
+									<Icon name="folder" size={13} />{$t('coordination.openWorktree')}
+								</button>
+								<button class="btn-secondary" onclick={() => loadDiff(task)}>
+									<Icon name="git-diff" size={13} />{diffFor === task.id
+										? $t('coordination.hideDiff')
+										: $t('coordination.viewDiff')}
+								</button>
+							{/if}
+							{#if ['running', 'queued', 'blocked', 'reviewing'].includes(task.status)}
+								<button
+									class="btn-secondary"
+									disabled={busy === `pause:${task.id}`}
+									onclick={() => run(`pause:${task.id}`, () => pauseCoordTask(task.id))}
+								>
+									<Icon name="stop" size={13} />{$t('coordination.pause')}
+								</button>
+							{/if}
+							{#if task.status === 'paused' || task.status === 'failed'}
+								<button
+									class="btn-secondary"
+									disabled={busy === `resume:${task.id}`}
+									onclick={() => run(`resume:${task.id}`, () => resumeCoordTask(task.id))}
+									use:tooltip={task.status === 'failed'
+										? $t('coordination.retryHint')
+										: $t('coordination.resumeHint')}
+								>
+									<Icon name="play" size={13} />{task.status === 'failed'
+										? $t('coordination.retry')
+										: $t('coordination.resume')}
+								</button>
+							{/if}
+							{#if task.status === 'running'}
+								<button
+									class="btn-secondary"
+									onclick={() =>
+										run(`status:${task.id}`, () =>
+											setCoordTaskStatus(task.id, 'reviewing', 'marked ready by user')
+										)}
+								>
+									<Icon name="check" size={13} />{$t('coordination.markReady')}
+								</button>
+							{/if}
+							{#if task.worktree_path}
+								<button
+									class="btn-secondary"
+									disabled={busy === `validate:${task.id}`}
+									onclick={() =>
+										run(
+											`validate:${task.id}`,
+											() => validateCoordTask(task.id),
+											$t('coordination.validated')
+										)}
+								>
+									{#if busy === `validate:${task.id}`}<Spinner size={12} />{:else}<Icon
+											name="check-square"
+											size={13}
+										/>{/if}
+									{$t('coordination.runTests')}
+								</button>
+							{/if}
+							{#if task.blockers.some((b) => b.kind === 'needs_correction') && task.chat_id}
+								<button
+									class="btn-secondary"
+									onclick={() => run(`fix:${task.id}`, () => requestCoordCorrection(task.id))}
+									use:tooltip={$t('coordination.requestFixHint')}
+								>
+									<Icon name="tools" size={13} />{$t('coordination.requestFix')}
+								</button>
+							{/if}
+							{#if task.status === 'integration_ready' || task.status === 'completed'}
+								<button
+									class="btn-primary"
+									disabled={busy === `pr:${task.id}`}
+									onclick={() => publish(task)}
+								>
+									<Icon name="upload" size={13} />{task.pr_number
+										? $t('coordination.updatePr')
+										: $t('coordination.publishPr')}
+								</button>
+							{/if}
+						</div>
+
+						{#if diffFor === task.id}
+							<div class="rounded border border-gray-100 dark:border-white/6">
+								{#if diffLoading}
+									<div class="p-4"><Spinner size={14} /></div>
+								{:else if !diffFiles.length && !diffUntracked.length}
+									<div class="p-3 text-xs text-gray-500">{$t('coordination.noChanges')}</div>
+								{:else}
+									<div class="overflow-x-auto font-mono text-[0.6875rem] leading-[1.125rem]">
+										{#each diffFiles as file}
+											<div
+												class="sticky top-0 border-b border-gray-100 bg-gray-50 px-2 py-1 text-[0.625rem] font-medium text-gray-500 dark:border-white/4 dark:bg-white/3 dark:text-gray-400"
+											>
+												{file.path}
+											</div>
+											<DiffHunkList hunks={file.hunks} path={file.path} showNumbers />
+										{/each}
+									</div>
+									{#if diffUntracked.length}
+										<div
+											class="border-t border-gray-100 p-2 text-xs text-gray-500 dark:border-white/6"
+										>
+											{$t('coordination.untracked')}: {diffUntracked.join(', ')}
+										</div>
+									{/if}
+								{/if}
+							</div>
+						{/if}
+
+						<!-- Facts -->
+						<dl class="facts">
+							<dt>{$t('coordination.branch')}</dt>
+							<dd class="font-mono">{task.branch ?? '—'}</dd>
+							<dt>{$t('coordination.base')}</dt>
+							<dd class="font-mono">{task.meta.base_branch ?? task.base_ref ?? '—'}</dd>
+							<dt>{$t('coordination.worktree')}</dt>
+							<dd class="break-all font-mono">
+								{task.worktree_path ?? $t('coordination.readOnly')}
+							</dd>
+							<dt>{$t('coordination.agent')}</dt>
+							<dd>
+								{task.agent ?? '—'}
+								{#if task.agent_session_id}<span class="font-mono text-gray-400">
+										· {task.agent_session_id}</span
+									>{/if}
+							</dd>
+							<dt>{$t('coordination.pr')}</dt>
+							<dd>
+								{#if task.pr_url}
+									<a
+										class="text-blue-600 hover:underline dark:text-blue-400"
+										href={task.pr_url}
+										target="_blank"
+										rel="noreferrer"
+									>
+										#{task.pr_number} · {task.pr_state}
+									</a>
+								{:else}—{/if}
+							</dd>
+							<dt>{$t('coordination.updated')}</dt>
+							<dd>{relTime(task.updated_at)}</dd>
+						</dl>
+
+						{#if task.blockers.length}
+							<section>
+								<h3 class="section-title">{$t('coordination.blockers')}</h3>
+								<ul class="space-y-1">
+									{#each task.blockers as blocker}
+										<li
+											class="rounded bg-red-50 px-2 py-1 text-xs text-red-700 dark:bg-red-500/10 dark:text-red-300"
+										>
+											<span class="font-medium">{$t(`coordination.blocker.${blocker.kind}`)}</span>
+											{#if blocker.kind === 'waiting_on' && blocker.tasks}
+												: {blocker.tasks.map(titleOf).join(', ')}
+											{:else if blocker.detail}: {blocker.detail}{/if}
+										</li>
+									{/each}
+								</ul>
+							</section>
+						{/if}
+
+						<section>
+							<h3 class="section-title">{$t('coordination.dependencies')}</h3>
+							{#if !dependsOn(task.id).length && !requiredBy(task.id).length}
+								<p class="text-xs text-gray-500">{$t('coordination.noDependencies')}</p>
+							{/if}
+							{#each dependsOn(task.id) as dep}
+								<button class="dep-row" onclick={() => select(dep.id)}>
+									<Icon name="arrow-left" size={12} />
+									<span class="truncate">{$t('coordination.dependsOn')} {dep.title}</span>
+									<span class="pill ml-auto {STATUS_CLASS[dep.status]}"
+										>{statusLabel(dep.status)}</span
+									>
+								</button>
+							{/each}
+							{#each requiredBy(task.id) as dep}
+								<button class="dep-row" onclick={() => select(dep.id)}>
+									<Icon name="arrow-right-from-line" size={12} />
+									<span class="truncate">{$t('coordination.requiredBy')} {dep.title}</span>
+									<span class="pill ml-auto {STATUS_CLASS[dep.status]}"
+										>{statusLabel(dep.status)}</span
+									>
+								</button>
+							{/each}
+							{#if coord.tasks.filter((o) => o.id !== task.id && !['completed', 'failed'].includes(o.status) && !dependsOn(task.id).some((d) => d.id === o.id)).length}
+								<select
+									class="field mt-1 text-xs"
+									value=""
+									onchange={(e) => {
+										const target = (e.currentTarget as HTMLSelectElement).value;
+										if (target) run(`dep:${task.id}`, () => addCoordDependency(task.id, target));
+										(e.currentTarget as HTMLSelectElement).value = '';
+									}}
+								>
+									<option value="">{$t('coordination.addDependency')}</option>
+									{#each coord.tasks.filter((o) => o.id !== task.id && !['completed', 'failed'].includes(o.status) && !dependsOn(task.id).some((d) => d.id === o.id)) as other}
+										<option value={other.id}>{other.title}</option>
+									{/each}
+								</select>
+							{/if}
+						</section>
+
+						<section>
+							<h3 class="section-title">{$t('coordination.conflicts')}</h3>
+							{#if !conflictsOf(task.id).length}
+								<p class="text-xs text-gray-500">{$t('coordination.noConflicts')}</p>
+							{/if}
+							<ul class="space-y-1.5">
+								{#each conflictsOf(task.id) as conflict (conflict.id)}
+									{@const other = conflict.task_a === task.id ? conflict.task_b : conflict.task_a}
+									<li
+										class="rounded border border-gray-100 px-2 py-1.5 text-xs dark:border-white/6"
+									>
+										<div class="flex flex-wrap items-center gap-1.5">
+											<span class="font-semibold uppercase {LEVEL_CLASS[conflict.level]}">
+												{$t(`coordination.level.${conflict.level}`)}
+											</span>
+											<span class="text-gray-700 dark:text-gray-200">
+												{$t(`coordination.kind.${conflict.kind}`)}
+											</span>
+											<span class="text-gray-500">· {$t('coordination.with')} {titleOf(other)}</span
+											>
+											{#if conflict.status === 'acknowledged'}
+												<span class="text-gray-400">· {$t('coordination.acknowledged')}</span>
+											{/if}
+											<span class="ml-auto flex gap-1">
+												{#if conflict.status === 'open'}
+													<button
+														class="link"
+														onclick={() =>
+															run(`ack:${conflict.id}`, () =>
+																setCoordConflictStatus(conflict.id, 'acknowledged')
+															)}
+														use:tooltip={$t('coordination.acknowledgeHint')}
+														>{$t('coordination.acknowledge')}</button
+													>
+												{/if}
+												<button
+													class="link"
+													onclick={() =>
+														run(`res:${conflict.id}`, () =>
+															setCoordConflictStatus(conflict.id, 'resolved')
+														)}
+													use:tooltip={$t('coordination.resolveHint')}
+													>{$t('coordination.resolve')}</button
+												>
+											</span>
+										</div>
+										{#if conflict.evidence.files?.length}
+											<div class="mt-0.5 break-all font-mono text-[0.6875rem] text-gray-500">
+												{conflict.evidence.files.join(', ')}
+											</div>
+										{/if}
+										{#if conflict.evidence.symbols}
+											<div class="mt-0.5 font-mono text-[0.6875rem] text-gray-500">
+												{Object.keys(conflict.evidence.symbols).join(', ')}
+											</div>
+										{/if}
+										{#if conflict.evidence.packages}
+											<div class="mt-0.5 font-mono text-[0.6875rem] text-gray-500">
+												{conflict.evidence.packages.map((p) => p.package).join(', ')}
+											</div>
+										{/if}
+									</li>
+								{/each}
+							</ul>
+						</section>
+
+						<section>
+							<h3 class="section-title">{$t('coordination.validation')}</h3>
+							{#if task.validation?.isolated}
+								{@const v = task.validation.isolated}
+								<p class="text-xs">
+									<span
+										class={v.status === 'passed'
+											? 'text-emerald-600 dark:text-emerald-400'
+											: v.status === 'failed'
+												? 'text-red-600 dark:text-red-400'
+												: 'text-gray-500'}
+									>
+										{$t(`coordination.validationStatus.${v.status}`)}
+									</span>
+									{#if v.command}<span class="font-mono text-gray-500"> · {v.command}</span>{/if}
+									{#if v.duration_ms != null}<span class="text-gray-400">
+											· {(v.duration_ms / 1000).toFixed(1)}s</span
+										>{/if}
+									{#if v.at}<span class="text-gray-400"> · {relTime(v.at)}</span>{/if}
+								</p>
+								{#if v.status === 'failed' && v.output_tail}
+									<pre class="output">{v.output_tail.slice(-3000)}</pre>
+								{/if}
+							{:else}
+								<p class="text-xs text-gray-500">{$t('coordination.notValidated')}</p>
+							{/if}
+							{#if task.validation?.integration}
+								<p class="mt-1 text-xs text-emerald-600 dark:text-emerald-400">
+									{$t('coordination.integrationPassed', {
+										run: task.validation.integration.run_id
+									})}
+								</p>
+							{/if}
+							{#if task.status === 'reviewing'}
+								<button class="link mt-1 text-xs" onclick={() => checkReadiness(task)}>
+									{$t('coordination.checkReadiness')}
+								</button>
+								{#if readiness}
+									<p class="mt-1 text-xs {readiness.ready ? 'text-emerald-600' : 'text-amber-600'}">
+										{readiness.ready ? $t('coordination.ready') : readiness.reasons.join('; ')}
+									</p>
+								{/if}
+							{/if}
+						</section>
+
+						{#if changedFiles(task).length}
+							<section>
+								<h3 class="section-title">
+									{$t('coordination.files')} · {changedFiles(task).length}
+								</h3>
+								<p class="break-all font-mono text-[0.6875rem] text-gray-500">
+									{changedFiles(task).slice(0, 40).join(', ')}
+								</p>
+							</section>
+						{/if}
+
+						<section>
+							<h3 class="section-title">{$t('coordination.messages')}</h3>
+							<ul class="space-y-1">
+								{#each coord.messages
+									.filter((m) => m.to_task === task.id || m.from_task === task.id)
+									.slice(0, 30) as message (message.id)}
+									<li class="text-xs">
+										<span class="text-gray-400">{relTime(message.created_at)}</span>
+										<span class="font-medium text-gray-600 dark:text-gray-300">
+											{message.from_task === task.id
+												? `→ ${titleOf(message.to_task)}`
+												: `← ${message.from_task ? titleOf(message.from_task) : $t('coordination.coordinator')}`}
+										</span>
+										<span class="text-gray-400">[{message.kind}]</span>
+										<span class="text-gray-700 dark:text-gray-200">{message.body}</span>
+										{#if message.to_task === task.id && !message.delivered_at}
+											<span class="text-amber-600 dark:text-amber-400"
+												>· {$t('coordination.pendingDelivery')}</span
+											>
+										{/if}
+									</li>
+								{:else}
+									<li class="text-xs text-gray-500">{$t('coordination.noMessages')}</li>
+								{/each}
+							</ul>
+							<form
+								class="mt-2 flex gap-1.5"
+								onsubmit={(e) => {
+									e.preventDefault();
+									if (!note.trim()) return;
+									const body = note.trim();
+									note = '';
+									run(`note:${task.id}`, () => sendCoordMessage(task.id, body));
+								}}
+							>
+								<input
+									class="field flex-1 text-xs"
+									bind:value={note}
+									placeholder={$t('coordination.notePlaceholder')}
+								/>
+								<button class="btn-secondary" type="submit" disabled={!note.trim()}>
+									{$t('coordination.send')}
+								</button>
+							</form>
+						</section>
+
+						{#if task.worktree_path && ['completed', 'failed', 'paused', 'blocked'].includes(task.status)}
+							<section class="border-t border-gray-100 pt-3 dark:border-white/6">
+								<button
+									class="link text-xs text-red-600 dark:text-red-400"
+									onclick={() => removeWorktree(task)}
+								>
+									{$t('coordination.removeWorktree')}
+								</button>
+								<span class="ml-1 text-[0.6875rem] text-gray-400"
+									>{$t('coordination.removeWorktreeHint')}</span
+								>
+							</section>
+						{/if}
+					</div>
+				{/if}
+			</div>
+		</div>
+	{/if}
+</div>
+
+{#if showNewTask}
+	<Modal onclose={() => (showNewTask = false)} class="w-[min(32rem,calc(100vw-2rem))]">
+		<form
+			class="space-y-3 p-4 text-sm"
+			onsubmit={(e) => {
+				e.preventDefault();
+				createTask();
+			}}
+		>
+			<h2 class="text-base font-semibold text-gray-900 dark:text-gray-50">
+				{$t('coordination.newTask')}
+			</h2>
+			<p class="text-xs text-gray-500">{$t('coordination.newTaskHint')}</p>
+			<label class="block">
+				<span class="label">{$t('coordination.taskTitle')}</span>
+				<input class="field" bind:value={form.title} required maxlength="200" />
+			</label>
+			<label class="block">
+				<span class="label">{$t('coordination.description')}</span>
+				<textarea class="field" rows="2" bind:value={form.description}></textarea>
+			</label>
+			<label class="block">
+				<span class="label">{$t('coordination.startPrompt')}</span>
+				<textarea
+					class="field"
+					rows="3"
+					bind:value={form.startPrompt}
+					placeholder={$t('coordination.startPromptHint')}
+				></textarea>
+			</label>
+			<div class="flex items-center gap-2">
+				<span class="label mb-0">{$t('coordination.model')}</span>
+				<ModelSelector bind:selectedModel={form.model} preferAbove={false} align="start" />
+			</div>
+			<label class="block">
+				<span class="label">{$t('coordination.testCommand')}</span>
+				<input class="field font-mono" bind:value={form.testCommand} placeholder="npm test" />
+			</label>
+			{#if coord.tasks.some((task) => !['completed', 'failed'].includes(task.status))}
+				<fieldset>
+					<legend class="label">{$t('coordination.dependsOnLabel')}</legend>
+					<div class="max-h-32 space-y-1 overflow-y-auto">
+						{#each coord.tasks.filter((task) => !['completed', 'failed'].includes(task.status)) as other}
+							<label class="flex items-center gap-2 text-xs">
+								<input type="checkbox" value={other.id} bind:group={form.dependsOn} />
+								<span class="truncate">{other.title}</span>
+							</label>
+						{/each}
+					</div>
+				</fieldset>
+			{/if}
+			<div class="flex justify-end gap-2 pt-1">
+				<button type="button" class="btn-secondary" onclick={() => (showNewTask = false)}>
+					{$t('coordination.cancel')}
+				</button>
+				<button
+					type="submit"
+					class="btn-primary"
+					disabled={!form.title.trim() || busy === 'create'}
+				>
+					{#if busy === 'create'}<Spinner size={12} />{/if}
+					{$t('coordination.create')}
+				</button>
+			</div>
+		</form>
+	</Modal>
+{/if}
+
+<style>
+	.empty {
+		display: flex;
+		flex: 1;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		padding: 2rem 1rem;
+		text-align: center;
+		font-size: 0.8125rem;
+		color: rgb(107 114 128);
+	}
+	.section-label {
+		padding: 0.625rem 0.75rem 0.25rem;
+		font-size: 0.625rem;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: rgb(156 163 175);
+	}
+	.section-title {
+		margin-bottom: 0.375rem;
+		font-size: 0.6875rem;
+		font-weight: 600;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		color: rgb(107 114 128);
+	}
+	.task-row {
+		display: block;
+		width: 100%;
+		padding: 0.5rem 0.75rem;
+		text-align: left;
+		border-left: 2px solid transparent;
+	}
+	.task-row:hover {
+		background: rgb(0 0 0 / 0.03);
+	}
+	.task-row-selected {
+		background: rgb(0 0 0 / 0.045);
+		border-left-color: rgb(59 130 246);
+	}
+	:global(.dark) .task-row:hover,
+	:global(.dark) .task-row-selected {
+		background: rgb(255 255 255 / 0.05);
+	}
+	.section-toggle {
+		width: 100%;
+		padding: 0.5rem 0.75rem;
+		text-align: left;
+		font-size: 0.6875rem;
+		color: rgb(107 114 128);
+	}
+	.pill {
+		flex-shrink: 0;
+		border-radius: 9999px;
+		padding: 0.0625rem 0.4375rem;
+		font-size: 0.625rem;
+		font-weight: 500;
+		white-space: nowrap;
+	}
+	.facts {
+		display: grid;
+		grid-template-columns: max-content 1fr;
+		gap: 0.25rem 0.75rem;
+		font-size: 0.75rem;
+	}
+	.facts dt {
+		color: rgb(107 114 128);
+	}
+	.dep-row {
+		display: flex;
+		width: 100%;
+		align-items: center;
+		gap: 0.375rem;
+		padding: 0.25rem 0;
+		font-size: 0.75rem;
+		text-align: left;
+	}
+	.output {
+		margin-top: 0.375rem;
+		max-height: 14rem;
+		overflow: auto;
+		border-radius: 0.25rem;
+		background: rgb(0 0 0 / 0.04);
+		padding: 0.5rem;
+		font-size: 0.6875rem;
+		white-space: pre-wrap;
+	}
+	:global(.dark) .output {
+		background: rgb(255 255 255 / 0.05);
+	}
+	.btn-primary,
+	.btn-secondary,
+	.icon-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.3125rem;
+		border-radius: 0.375rem;
+		font-size: 0.75rem;
+		line-height: 1rem;
+		white-space: nowrap;
+	}
+	.btn-primary {
+		padding: 0.3125rem 0.625rem;
+		background: rgb(17 24 39);
+		color: white;
+	}
+	:global(.dark) .btn-primary {
+		background: rgb(243 244 246);
+		color: rgb(17 24 39);
+	}
+	.btn-secondary {
+		padding: 0.3125rem 0.625rem;
+		border: 1px solid rgb(229 231 235);
+		color: rgb(55 65 81);
+	}
+	:global(.dark) .btn-secondary {
+		border-color: rgb(255 255 255 / 0.1);
+		color: rgb(229 231 235);
+	}
+	.icon-btn {
+		padding: 0.3125rem;
+		color: rgb(107 114 128);
+	}
+	.btn-primary:disabled,
+	.btn-secondary:disabled,
+	.icon-btn:disabled {
+		opacity: 0.45;
+		cursor: default;
+	}
+	.link {
+		color: rgb(37 99 235);
+	}
+	.link:hover {
+		text-decoration: underline;
+	}
+	.label {
+		display: block;
+		margin-bottom: 0.25rem;
+		font-size: 0.75rem;
+		font-weight: 500;
+		color: rgb(75 85 99);
+	}
+	:global(.dark) .label {
+		color: rgb(209 213 219);
+	}
+	.field {
+		width: 100%;
+		border-radius: 0.375rem;
+		border: 1px solid rgb(229 231 235);
+		background: transparent;
+		padding: 0.375rem 0.5rem;
+		font-size: 0.8125rem;
+	}
+	:global(.dark) .field {
+		border-color: rgb(255 255 255 / 0.1);
+	}
+</style>
