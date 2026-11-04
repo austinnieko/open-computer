@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import uuid
 from pathlib import Path
@@ -396,6 +397,20 @@ def _apply_skills_create_prompt(
         )
         return True
     return False
+
+
+def _session_matches_cwd(resume_state: dict, cwd: str) -> bool:
+    """Only resume an agent session that was started in the same directory.
+
+    A chat moved to a different directory (for example into a task worktree)
+    must start a fresh agent session, otherwise the agent would keep working in
+    the old checkout. Sessions saved without a workspace are kept for
+    backwards compatibility.
+    """
+    saved = resume_state.get("workspace")
+    if not saved or not cwd:
+        return True
+    return os.path.realpath(str(saved)) == os.path.realpath(cwd)
 
 
 # ── Task registry ───────────────────────────────────────────
@@ -1667,7 +1682,9 @@ async def run_chat_task(
         log("[task %s] db save (%s) result: updated=%s", message_id[:8], save_reason, saved)
         return saved
 
-    async def save_session(agent_target: AgentModelTarget, resume_state: dict | None):
+    async def save_session(
+        agent_target: AgentModelTarget, resume_state: dict | None, cwd: str | None = None
+    ):
         if not resume_state:
             return
         chat = await Chat.get_by_id(chat_id)
@@ -1680,11 +1697,21 @@ async def run_chat_task(
             "profile_id": agent_target.profile_id,
             "agent": agent_target.agent,
             "model": agent_target.model,
-            "workspace": workspace,
+            "workspace": cwd or workspace,
             "updated_at": now_ms(),
         }
         meta["agent_sessions"] = sessions
         await Chat.update_meta(chat_id, meta, now_ms())
+        task_id = meta.get("coord_task_id")
+        if task_id:
+            from cptr.utils.coordination.registry import record_session
+
+            try:
+                await record_session(
+                    task_id, agent=agent_target.agent, session_id=resume_state.get("session_id")
+                )
+            except Exception:
+                logger.debug("[task %s] coord session record failed", message_id[:8], exc_info=True)
 
     async def _run_agent_target(agent_target: AgentModelTarget):
         nonlocal content, text_buffer, task_completed_success, skill_authoring_allowed
@@ -1701,7 +1728,12 @@ async def run_chat_task(
         chat_obj = await Chat.get_by_id(chat_id)
         identity = await identity_for_context({"request": request, "user_id": user_id})
         chat_params = (chat_obj.meta or {}).get("params", {}) if chat_obj else {}
-        agent_workspace = workspace or str(Path.home())
+        task_cwd = None
+        if chat_obj and (chat_obj.meta or {}).get("coord_task_id"):
+            from cptr.utils.coordination.registry import resolve_chat_cwd
+
+            task_cwd = await resolve_chat_cwd(chat_id, chat_obj.meta, identity)
+        agent_workspace = task_cwd or workspace or str(Path.home())
         messages, loaded_summary = await _load_message_history(chat_id, message_id)
         skill_settings = await get_skill_settings()
         skill_authoring_allowed = _has_prior_real_chat_content(messages, loaded_summary)
@@ -1750,7 +1782,9 @@ async def run_chat_task(
             sessions = (chat_obj.meta or {}).get("agent_sessions") or {}
             if isinstance(sessions, dict):
                 candidate = sessions.get(agent_target.profile_id)
-                if isinstance(candidate, dict):
+                if isinstance(candidate, dict) and _session_matches_cwd(
+                    candidate, agent_workspace
+                ):
                     resume_state = candidate
 
         runners = {
@@ -1953,7 +1987,7 @@ async def run_chat_task(
                 flushed_item = _flush_text()
                 if flushed_item:
                     await emit(output=flushed_item)
-                await save_session(agent_target, event.resume_state)
+                await save_session(agent_target, event.resume_state, agent_workspace)
                 await _save_message(
                     "agent done",
                     content=content,

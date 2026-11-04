@@ -169,6 +169,16 @@ def _headers(profile: dict[str, Any], password: str | None = None) -> dict[str, 
     return {"Authorization": f"Basic {token}"}
 
 
+def _directory_header(workspace: str | None) -> dict[str, str]:
+    """OpenCode 1.x ``x-opencode-directory`` header for the run directory."""
+    if not workspace:
+        return {}
+    path = os.path.abspath(workspace)
+    if not path.isascii():
+        return {}  # header values must be ASCII; the managed server's cwd still applies
+    return {"x-opencode-directory": path}
+
+
 async def _request(
     client: httpx.AsyncClient,
     method: str,
@@ -409,6 +419,10 @@ async def run_opencode_agent(
                             ):
                                 yield event
                             return
+                        # 1.x picks the project directory per request; without
+                        # this an external server runs every session in its own
+                        # startup cwd instead of the chat's (task) directory.
+                        headers = {**headers, **_directory_header(workspace)}
                         session_id = _resume_session_id(resume_state)
                         resumed = bool(session_id)
                         if session_id is None:

@@ -14,6 +14,13 @@ from cptr.models.chats import (
     is_subagent_result_message,
 )
 from cptr.models.automations import Automation, AutomationRun
+from cptr.models.coordination import (
+    CoordClaim,
+    CoordConflict,
+    CoordMessage,
+    CoordTask,
+    CoordTaskDep,
+)
 
 __all__ = [
     "Base",
@@ -31,4 +38,9 @@ __all__ = [
     "is_subagent_result_message",
     "Automation",
     "AutomationRun",
+    "CoordTask",
+    "CoordTaskDep",
+    "CoordClaim",
+    "CoordConflict",
+    "CoordMessage",
 ]

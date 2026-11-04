@@ -708,14 +708,27 @@ async def create_worktree(
     branch: str,
     path: str | None = None,
     identity: ExecutionIdentity | None = None,
+    *,
+    base_ref: str | None = None,
+    new_branch: bool = True,
 ) -> dict[str, str]:
-    """Create a new branch-backed worktree beside the current repository."""
+    """Create a branch-backed worktree beside the current repository.
+
+    With ``new_branch=False`` an existing local branch is checked out instead of
+    creating one. ``base_ref`` is the start point for a new branch.
+    """
     _, repo_root_out, _ = await _run(
         "rev-parse", "--show-toplevel", cwd=root, identity=identity
     )
     repo_root = repo_root_out.strip() or root
     target_path = path or _worktree_path_for_branch(repo_root, branch)
-    await _run("worktree", "add", "-b", branch, target_path, cwd=root, identity=identity)
+    if new_branch:
+        args = ["worktree", "add", "-b", branch, target_path]
+        if base_ref:
+            args.append(base_ref)
+    else:
+        args = ["worktree", "add", target_path, branch]
+    await _run(*args, cwd=root, identity=identity)
     return {"path": target_path}
 
 
