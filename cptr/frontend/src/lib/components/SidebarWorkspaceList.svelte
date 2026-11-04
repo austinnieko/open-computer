@@ -6,7 +6,8 @@
 		reorderWorkspaces,
 		sidebarOpen,
 		activeTab,
-		currentWorkspace
+		currentWorkspace,
+		openChatInSplit
 	} from '$lib/stores';
 	import { chatEnabled, updateChatStatuses } from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
@@ -21,7 +22,7 @@
 	import Sortable from 'sortablejs';
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import ChatItem from './common/ChatItem.svelte';
-	import { describeActivity, subagentsOf } from '$lib/stores/subagents.svelte';
+	import { describeActivity, subagentsOf, trackSubagents } from '$lib/stores/subagents.svelte';
 	import DropdownMenu from './DropdownMenu.svelte';
 	import Icon from './Icon.svelte';
 
@@ -95,6 +96,31 @@
 				if (!wsChatsCache.has(p) && !wsChatsLoading.has(p)) fetchWorkspaceChats(p);
 			}
 		});
+	});
+
+	// Load sub-agents for every chat listed under an expanded workspace, so the
+	// Agents branches show whether or not that chat is open.
+	const trackedChats = new Map<string, () => void>();
+	$effect(() => {
+		const visible = new Set<string>();
+		for (const path of expandedWorkspaces) {
+			for (const chat of wsChatsCache.get(path) ?? []) visible.add(chat.id);
+		}
+		untrack(() => {
+			for (const id of visible) {
+				if (!trackedChats.has(id)) trackedChats.set(id, trackSubagents(id));
+			}
+			for (const [id, release] of trackedChats) {
+				if (!visible.has(id)) {
+					release();
+					trackedChats.delete(id);
+				}
+			}
+		});
+	});
+	onDestroy(() => {
+		for (const release of trackedChats.values()) release();
+		trackedChats.clear();
 	});
 
 	function agentBranchOpen(chatId: string): boolean {
@@ -233,6 +259,15 @@
 			...wsChatsCache,
 			[wsPath, chats.map((item) => (item.id === chatId ? { ...item, title } : item))]
 		]);
+	}
+
+	/** Show a chat in its own pane next to the current one. */
+	function openChatBeside() {
+		if (!chatMenu) return;
+		const { chatId, wsPath } = chatMenu;
+		chatMenu = null;
+		if (wsPath === currentPath) openChatInSplit(chatId);
+		else openChat(chatId, wsPath);
 	}
 
 	function copyChatPath() {
@@ -560,6 +595,11 @@
 		anchor={chatMenu.anchor}
 		align="end"
 		items={[
+			{
+				label: 'Open beside',
+				icon: 'split-view',
+				onclick: openChatBeside
+			},
 			{
 				label: $t('files.copyPath'),
 				icon: 'copy',

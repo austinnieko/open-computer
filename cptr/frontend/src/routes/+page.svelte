@@ -134,7 +134,14 @@
 			label: chatId ? 'Chat' : 'New Chat',
 			path: chatId || `new-${Date.now()}`
 		};
-		updateHomeTabs(groupId, (tabs) => ({ tabs: [...tabs, tab], activeTabId: tab.id }));
+		// One chat view per pane: swap the chat shown rather than adding a tab.
+		updateHomeTabs(groupId, (tabs) => {
+			const at = tabs.findIndex((t) => t.type === 'chat');
+			const rest = tabs.filter((t) => t.type !== 'chat');
+			if (at < 0) return { tabs: [...rest, tab], activeTabId: tab.id };
+			const before = tabs.slice(0, at).filter((t) => t.type !== 'chat').length;
+			return { tabs: [...rest.slice(0, before), tab, ...rest.slice(before)], activeTabId: tab.id };
+		});
 	}
 
 	async function openHomeTerminal(groupId = $homeState.activeGroupId) {

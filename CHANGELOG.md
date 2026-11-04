@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.28] - 2026-11-04
+
+### Changed
+
+- 🗂️ **Chats no longer pile up as tabs.** Each pane now has one chat view. Opening a chat from the sidebar, or starting a new one, switches what that view shows instead of adding another tab across the top. If the chat is already open in another pane, that pane is brought forward. The tab bar keeps files, terminals, and the browser. A chat shows there only when it shares a pane with those, so you can switch between them. Extra chat tabs from before are folded into one the next time you open the workspace. Chats keep running in the background, and the sidebar still shows which ones are working.
+- ↔️ **Open a chat beside another.** Choose **Open beside** from a chat's menu (⋯) in the sidebar to show it in its own pane next to the current one.
+- 🌳 **Sidebar agents for every listed chat.** The Agents branch under a chat in the sidebar now appears for every chat shown, not just the ones currently open.
+
 ## [0.9.27] - 2026-11-04
 
 ### Changed
