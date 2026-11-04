@@ -26,6 +26,7 @@ from cptr.utils.coordination import (
     validation,
 )
 from cptr.utils.coordination import worktrees as wt
+from cptr.utils.config import now_ms
 from cptr.utils.identity import ExecutionIdentity
 from cptr.socket.main import emit_to_user
 
@@ -69,6 +70,7 @@ class RegisterTaskRequest(BaseModel):
     model_id: str | None = None
     test_command: str | None = None
     targeted_test_command: str | None = None
+    create_chat: bool = False
 
 
 class BindChatRequest(BaseModel):
@@ -107,13 +109,99 @@ async def list_tasks(request: Request, root: str):
         repo = await wt.repo_identity(root, identity)
     except wt.WorktreeError as exc:
         raise HTTPException(400, str(exc)) from exc
+    from cptr.utils.chat_task import get_active_chat_ids
+
     tasks = await CoordTask.query(user_id=user_id, repo_key=repo.key)
     deps = await CoordTaskDep.all_for_repo(repo.key)
+    active = get_active_chat_ids()
     return {
         "repo_root": repo.main_root,
+        "repo_key": repo.key,
+        "active_chats": sorted(t.chat_id for t in tasks if t.chat_id and t.chat_id in active),
         "tasks": [t.to_dict() for t in tasks],
         "dependencies": [{"task_id": a, "depends_on": b} for a, b in deps],
     }
+
+
+@router.get("/tasks/{task_id}/diff")
+async def task_diff(request: Request, task_id: str):
+    """Everything the task changed relative to its base: commits plus uncommitted edits."""
+    from cptr.utils.coordination import changes as ch
+    from cptr.utils.git import _parse_diff, _run
+
+    task = await _own_task(request, task_id)
+    if not task.worktree_path:
+        raise HTTPException(400, "task has no worktree")
+    _, identity = await _identity(request, task.repo_root)
+    cs = await ch.compute(task, identity)
+    if cs is None:
+        raise HTTPException(409, "task worktree is missing")
+    _, out, _ = await _run(
+        "diff",
+        "--unified=3",
+        "--color=never",
+        cs.merge_base,
+        cwd=task.worktree_path,
+        check=False,
+        identity=identity,
+    )
+    result = _parse_diff(out)
+    result["untracked"] = sorted(
+        p
+        for p, s in cs.uncommitted.items()
+        if s == "A" and p not in {f.get("path") for f in result.get("files", [])}
+    )
+    result["merge_base"] = cs.merge_base
+    result["head"] = cs.head
+    return result
+
+
+@router.post("/tasks/{task_id}/pause")
+async def pause_task(request: Request, task_id: str):
+    """Stop the task's running agent turn (if any) and mark it paused."""
+    from cptr.utils.chat_task import _task_chat, cancel_task, is_running
+
+    task = await _own_task(request, task_id)
+    stopped = 0
+    if task.chat_id:
+        for message_id, chat_id in list(_task_chat.items()):
+            if chat_id == task.chat_id and is_running(message_id):
+                stopped += int(await cancel_task(message_id))
+    if task.status != "paused":
+        try:
+            await registry.set_status(task.id, "paused", reason="paused by user")
+        except registry.CoordinationError as exc:
+            raise HTTPException(409, str(exc)) from exc
+    result = (await CoordTask.get_by_id(task.id)).to_dict()
+    await _emit(task.user_id, result)
+    coordinator.request_refresh(task.repo_key)
+    return {"task": result, "stopped_turns": stopped}
+
+
+@router.post("/tasks/{task_id}/resume")
+async def resume_task(request: Request, task_id: str):
+    """Queue the task again. With an agent chat, the scheduler continues it when a
+    slot is free and its dependencies are ready (one turn, "continue")."""
+    task = await _own_task(request, task_id)
+    if task.status not in {"paused", "failed"}:
+        raise HTTPException(409, f"task is {task.status}")
+    try:
+        await registry.set_status(task.id, "queued", reason="resumed by user")
+    except registry.CoordinationError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    current = await CoordTask.get_by_id(task.id)
+    if current.chat_id:
+        meta = dict(current.meta or {})
+        meta["start"] = {
+            "prompt": "Continue this task from where you left off. Check `git status` and "
+            "`git log` in this worktree first; do not redo work that is already committed.",
+            "model_id": None,
+        }
+        await CoordTask.update_fields(task.id, meta=meta)
+    coordinator.request_refresh(task.repo_key)
+    result = (await CoordTask.get_by_id(task.id)).to_dict()
+    await _emit(task.user_id, result)
+    return result
 
 
 @router.get("/tasks/{task_id}")
@@ -137,6 +225,16 @@ async def register(request: Request, body: RegisterTaskRequest):
         chat = await Chat.get_by_id(body.chat_id)
         if not chat or chat.user_id != user_id:
             raise HTTPException(404, "chat not found")
+    elif body.create_chat:
+        try:
+            repo = await wt.repo_identity(root, identity)
+        except wt.WorktreeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        meta = {"workspace": repo.main_root}
+        if body.model_id:
+            meta["last_model"] = body.model_id
+        chat = await Chat.create(user_id, body.title.strip()[:120], meta=meta, created_at=now_ms())
+        body.chat_id = chat.id
     try:
         result = await registry.register_task(
             user_id=user_id,
@@ -221,10 +319,13 @@ async def _repo_key(request: Request, root: str) -> str:
         raise HTTPException(400, str(exc)) from exc
 
 
-async def _owned_repo(request: Request, repo_key: str) -> None:
+async def _owned_repo(request: Request, repo_key: str, *, required: bool = True) -> bool:
     user_id = _user_id(request)
-    if not await CoordTask.query(user_id=user_id, repo_key=repo_key):
+    if await CoordTask.query(user_id=user_id, repo_key=repo_key):
+        return True
+    if required:
         raise HTTPException(404, "no tasks for this repository")
+    return False
 
 
 @router.post("/tasks/{task_id}/dependencies")
@@ -250,7 +351,8 @@ async def remove_dependency(request: Request, task_id: str, depends_on: str):
 @router.get("/conflicts")
 async def list_conflicts(request: Request, root: str, include_resolved: bool = False):
     repo_key = await _repo_key(request, root)
-    await _owned_repo(request, repo_key)
+    if not await _owned_repo(request, repo_key, required=False):
+        return {"conflicts": []}
     statuses = None if include_resolved else {"open", "acknowledged"}
     return {
         "conflicts": [c.to_dict() for c in await CoordConflict.query(repo_key, statuses=statuses)]
@@ -275,7 +377,8 @@ async def set_conflict_status(request: Request, conflict_id: str, body: Conflict
 @router.get("/messages")
 async def list_messages(request: Request, root: str, task_id: str | None = None):
     repo_key = await _repo_key(request, root)
-    await _owned_repo(request, repo_key)
+    if not await _owned_repo(request, repo_key, required=False):
+        return {"messages": []}
     rows = await CoordMessage.for_repo(repo_key, task_id=task_id)
     return {"messages": [m.to_dict() for m in rows]}
 

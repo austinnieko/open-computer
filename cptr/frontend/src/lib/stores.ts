@@ -61,7 +61,7 @@ export interface FileFlashTarget {
 
 export interface Tab {
 	id: string;
-	type: 'home' | 'files' | 'terminal' | 'file' | 'chat' | 'preview' | 'browser'; // preview is migrated on load
+	type: 'home' | 'files' | 'terminal' | 'file' | 'chat' | 'preview' | 'browser' | 'coordination'; // preview is migrated on load
 	label: string;
 	filePath?: string;
 	edit?: boolean;
@@ -83,7 +83,8 @@ const SUPPORTED_TAB_TYPES = new Set([
 	'file',
 	'chat',
 	'preview',
-	'browser'
+	'browser',
+	'coordination'
 ]);
 
 function isSupportedTab(tab: { type?: unknown }): tab is Tab {
@@ -1240,6 +1241,24 @@ export async function openBrowserTab(
 		toast.error(error instanceof Error ? error.message : 'Failed to open Browser');
 		closeTab(tabId, gid, { skipUnsavedPrompt: true });
 	}
+}
+
+/** Open the multi-agent coordination dashboard (one per workspace; reused if open). */
+export function openCoordinationTab(targetGroupId?: string): void {
+	const ws = get(currentWorkspace);
+	if (!ws) return;
+	for (const g of ws.groups) {
+		const open = g.tabs.find((t) => t.type === 'coordination');
+		if (open) {
+			setActiveGroup(g.id);
+			setActiveTab(open.id, g.id);
+			return;
+		}
+	}
+	const gid = targetGroupId ?? ws.activeGroupId;
+	if (!ws.groups.some((group) => group.id === gid)) return;
+	const tab: Tab = { id: nextId(), type: 'coordination', label: 'Agents' };
+	updateGroupTabs(gid, (tabs) => ({ tabs: [...tabs, tab], activeTabId: tab.id }));
 }
 
 /**

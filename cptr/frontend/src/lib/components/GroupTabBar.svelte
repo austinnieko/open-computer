@@ -10,6 +10,8 @@
 		openUntitledFileTab,
 		openTerminalTab,
 		openBrowserTab,
+		openCoordinationTab,
+		isGitRepo,
 		openInSplit,
 		closeGroup,
 		moveTabToGroup,
@@ -114,6 +116,8 @@
 				return 'monitor';
 			case 'browser':
 				return 'browser';
+			case 'coordination':
+				return 'list';
 			default:
 				return 'page';
 		}
@@ -265,6 +269,15 @@
 						shortcut: formatChord($keybindings.newBrowser),
 						onclick: () => openBrowserTab(group.id)
 					},
+					...($isGitRepo
+						? [
+								{
+									label: $t('bar.agentsDashboard'),
+									icon: 'list',
+									onclick: () => openCoordinationTab(group.id)
+								}
+							]
+						: []),
 					...($voiceMemosEnabled
 						? [
 								{

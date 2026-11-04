@@ -44,6 +44,7 @@
 	import GitView from '$lib/components/GitView.svelte';
 	import Terminal from '$lib/components/Terminal.svelte';
 	import BrowserPreview from '$lib/components/BrowserPreview.svelte';
+	import CoordinationPanel from '$lib/components/CoordinationPanel.svelte';
 	import ChatPanel from '$lib/components/chat/ChatPanel.svelte';
 	import DirectoryPicker from '$lib/components/DirectoryPicker.svelte';
 	import GroupTabBar from '$lib/components/GroupTabBar.svelte';
@@ -1434,6 +1435,11 @@
 						active={tab.id === group.activeTabId}
 						onopenchat={(chatId) => openChatTab(chatId, group.id)}
 					/>
+				</div>
+			{/each}
+			{#each group.tabs.filter((tab) => tab.type === 'coordination') as tab (tab.id)}
+				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId}>
+					<CoordinationPanel workspace={$currentWorkspace!.path} />
 				</div>
 			{/each}
 			{#each group.tabs.filter((tab) => tab.type === 'terminal' && tab.sessionId) as tab (tab.id)}
