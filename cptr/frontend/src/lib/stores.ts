@@ -53,6 +53,12 @@ export interface FileSearchTarget {
 	requestId: number;
 }
 
+/** Reload the file, then scroll to and briefly highlight `text` (an agent's edit). */
+export interface FileFlashTarget {
+	text: string;
+	requestId: number;
+}
+
 export interface Tab {
 	id: string;
 	type: 'home' | 'files' | 'terminal' | 'file' | 'chat' | 'preview' | 'browser'; // preview is migrated on load
@@ -67,6 +73,7 @@ export interface Tab {
 	permanent?: boolean;
 	badge?: number;
 	searchTarget?: FileSearchTarget;
+	flash?: FileFlashTarget;
 }
 
 const SUPPORTED_TAB_TYPES = new Set([
@@ -1011,6 +1018,24 @@ export function updateTabLabel(tabId: string, label: string): void {
 	);
 }
 
+export function clearFileFlash(tabId: string, requestId: number): void {
+	currentWorkspace.update((workspace) =>
+		workspace
+			? {
+					...workspace,
+					groups: workspace.groups.map((group) => ({
+						...group,
+						tabs: group.tabs.map((tab) =>
+							tab.id === tabId && tab.flash?.requestId === requestId
+								? { ...tab, flash: undefined }
+								: tab
+						)
+					}))
+				}
+			: workspace
+	);
+}
+
 export function clearFileSearchTarget(tabId: string, requestId: number): void {
 	currentWorkspace.update((workspace) =>
 		workspace
@@ -1032,7 +1057,7 @@ export function clearFileSearchTarget(tabId: string, requestId: number): void {
 export function openFileTab(
 	filePath: string,
 	targetGroupId?: string,
-	options: { edit?: boolean; searchTarget?: FileSearchTarget } = {}
+	options: { edit?: boolean; searchTarget?: FileSearchTarget; flash?: FileFlashTarget } = {}
 ): void {
 	const ws = get(currentWorkspace);
 	if (!ws) {
@@ -1047,11 +1072,16 @@ export function openFileTab(
 	// Reuse existing tab within this group
 	const existing = group.tabs.find((t) => t.type === 'file' && t.filePath === filePath);
 	if (existing) {
-		if (options.edit || options.searchTarget) {
+		if (options.edit || options.searchTarget || options.flash) {
 			updateGroupTabs(gid, (tabs) => ({
 				tabs: tabs.map((t) =>
 					t.id === existing.id
-						? { ...t, ...(options.edit ? { edit: true } : {}), searchTarget: options.searchTarget }
+						? {
+								...t,
+								...(options.edit ? { edit: true } : {}),
+								searchTarget: options.searchTarget,
+								...(options.flash ? { flash: options.flash } : {})
+							}
 						: t
 				),
 				activeTabId: existing.id
@@ -1069,7 +1099,8 @@ export function openFileTab(
 		label: name,
 		filePath,
 		edit: options.edit,
-		searchTarget: options.searchTarget
+		searchTarget: options.searchTarget,
+		flash: options.flash
 	};
 
 	updateGroupTabs(gid, (tabs) => ({
@@ -1081,7 +1112,7 @@ export function openFileTab(
 function openHomeFileTab(
 	filePath: string,
 	targetGroupId?: string,
-	options: { edit?: boolean; searchTarget?: FileSearchTarget } = {}
+	options: { edit?: boolean; searchTarget?: FileSearchTarget; flash?: FileFlashTarget } = {}
 ): void {
 	const state = get(homeState);
 	const groupId = targetGroupId ?? state.activeGroupId;
@@ -1095,7 +1126,8 @@ function openHomeFileTab(
 		label: getPathDisplayName(filePath, filePath),
 		filePath,
 		edit: options.edit,
-		searchTarget: options.searchTarget
+		searchTarget: options.searchTarget,
+		flash: options.flash
 	};
 	const updateGroup = (group: EditorGroup) =>
 		group.id === groupId

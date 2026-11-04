@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.25] - 2026-11-04
+
+### Added
+
+- 📝 **See every code change in the chat.** When an agent edits, rewrites, or creates a file, the chat now shows a card with a red and green diff of exactly what changed and how many lines were added and removed. File changes are no longer hidden in a collapsed tool step. Long diffs are trimmed, with a button to show them in full. Click the file name to open it at the change.
+- 👀 **Follow edits live.** Turn on **Follow** on any change card, and each file an agent edits opens in the editor next to the chat. The editor scrolls to the change and briefly highlights the edited lines. It also follows edits from sub-agents. The chat stays focused so you can keep typing, files with your own unsaved changes are never reloaded over, and the setting is remembered.
+
 ## [0.9.24] - 2026-11-04
 
 ### Added

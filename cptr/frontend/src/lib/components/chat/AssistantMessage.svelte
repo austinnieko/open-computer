@@ -8,6 +8,8 @@
 	import MessageTimestamp from './MessageTimestamp.svelte';
 	import ReasoningCollapsible from './ReasoningCollapsible.svelte';
 	import SubagentCard from './SubagentCard.svelte';
+	import FileChangeCard from './FileChangeCard.svelte';
+	import { FILE_EDIT_TOOLS } from '$lib/stores/followEdits.svelte';
 	import ToolCallCollapsible from './ToolCallCollapsible.svelte';
 	import { currentWorkspace, openFileTab } from '$lib/stores';
 	import { ttsConfigured, ttsEnabled } from '$lib/stores/audio';
@@ -284,13 +286,20 @@
 		output: any;
 	}
 
+	interface FileChangeItem {
+		type: 'file_change_item';
+		item: any;
+		output: any;
+	}
+
 	type DisplayItem =
 		| ActivityGroup
 		| MessageItem
 		| ArtifactItem
 		| ImageItem
 		| FileItem
-		| SubagentItem;
+		| SubagentItem
+		| FileChangeItem;
 
 	const outputText = $derived.by((): string => {
 		return (output || [])
@@ -336,6 +345,19 @@
 		return cleaned.replace(/\n{3,}/g, '\n\n').trim();
 	}
 
+	function isArtifactCall(item: any): boolean {
+		if (item.name !== 'create_file') return false;
+		let a = item.arguments;
+		if (typeof a === 'string') {
+			try {
+				a = JSON.parse(a);
+			} catch {
+				return false;
+			}
+		}
+		return !!a?.artifact_type || !a?.path;
+	}
+
 	const displayItems = $derived.by((): DisplayItem[] => {
 		if (!output?.length) return [];
 
@@ -378,6 +400,15 @@
 				// Sub-agents get their own card instead of hiding in the activity group.
 				flushGroup();
 				items.push({ type: 'subagent_item', item, output: outputMap.get(item.call_id) });
+			} else if (
+				item.type === 'function_call' &&
+				FILE_EDIT_TOOLS.has(item.name) &&
+				item.status !== 'pending' &&
+				!isArtifactCall(item)
+			) {
+				// File edits show their diff in the chat instead of a collapsed row.
+				flushGroup();
+				items.push({ type: 'file_change_item', item, output: outputMap.get(item.call_id) });
 			} else if (item.type === 'function_call') {
 				if (item.name !== 'ask_user' || item.status !== 'pending') {
 					ensureGroup();
@@ -579,6 +610,8 @@
 								<ChatFilePreview {file} {filePath} />
 							{/if}
 						</div>
+					{:else if displayItem.type === 'file_change_item'}
+						<FileChangeCard item={displayItem.item} pairedOutput={displayItem.output} />
 					{:else if displayItem.type === 'subagent_item'}
 						<SubagentCard item={displayItem.item} pairedOutput={displayItem.output} {chatId} />
 					{:else if displayItem.type === 'activity_group'}

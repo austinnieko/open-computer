@@ -35,8 +35,9 @@
 	} from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import { trackSubagents } from '$lib/stores/subagents.svelte';
+	import { watchChatEdits } from '$lib/stores/followEdits.svelte';
 	import AgentsPanel from './AgentsPanel.svelte';
-	import { onMount, onDestroy, tick } from 'svelte';
+	import { onMount, onDestroy, tick, untrack } from 'svelte';
 	import { get } from 'svelte/store';
 	import {
 		currentWorkspace,
@@ -132,6 +133,13 @@
 	$effect(() => {
 		if (!chatId) return;
 		return trackSubagents(chatId);
+	});
+
+	// Follow edits from this chat (and its sub-agents) into the editor when enabled.
+	$effect(() => {
+		if (!chatId) return;
+		const id = chatId;
+		return untrack(() => watchChatEdits(id));
 	});
 	let showStatusModal = $state(false);
 	let showSkillsModal = $state(false);

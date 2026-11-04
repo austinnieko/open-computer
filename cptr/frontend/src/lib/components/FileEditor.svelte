@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { onMount, onDestroy, tick } from 'svelte';
 	import {
+		clearFileFlash,
 		clearFileSearchTarget,
 		clearTabEdit,
 		markTabUnsaved,
 		updateTabFilePath,
 		activeWorkspace,
+		type FileFlashTarget,
 		type FileSearchTarget
 	} from '$lib/stores';
 	import { get } from 'svelte/store';
@@ -37,6 +39,7 @@
 		type RangeSet
 	} from '@codemirror/state';
 	import {
+		Decoration,
 		EditorView,
 		GutterMarker,
 		keymap,
@@ -88,9 +91,10 @@
 		tabId: string;
 		edit?: boolean;
 		searchTarget?: FileSearchTarget;
+		flash?: FileFlashTarget;
 	}
 
-	let { filePath, tabId, edit = false, searchTarget }: Props = $props();
+	let { filePath, tabId, edit = false, searchTarget, flash }: Props = $props();
 
 	interface FileData {
 		path: string;
@@ -230,6 +234,29 @@
 		}
 		return builder.finish();
 	}
+
+	// ── Agent edit flash: briefly highlight the lines an agent just changed ──
+	const setFlashLinesEffect = StateEffect.define<{ from: number; to: number } | null>();
+	const flashLineDecoration = Decoration.line({ class: 'cm-agent-edit-flash' });
+	const flashLinesField = StateField.define({
+		create: () => Decoration.none,
+		update(value, transaction) {
+			value = value.map(transaction.changes);
+			for (const effect of transaction.effects) {
+				if (!effect.is(setFlashLinesEffect)) continue;
+				if (!effect.value) return Decoration.none;
+				const builder = new RangeSetBuilder<Decoration>();
+				const doc = transaction.state.doc;
+				for (let n = effect.value.from; n <= effect.value.to; n++) {
+					const line = doc.line(n);
+					builder.add(line.from, line.from, flashLineDecoration);
+				}
+				return builder.finish();
+			}
+			return value;
+		},
+		provide: (field) => EditorView.decorations.from(field)
+	});
 
 	const gitLineChangeField = StateField.define<{
 		changes: GitLineChange[];
@@ -877,6 +904,53 @@
 	let themeObserver: MutationObserver | null = null;
 	let appliedSearchTarget = 0;
 
+	// Agent edits: reload the file (unless you have unsaved changes), then scroll
+	// to the edited text and flash those lines.
+	let pendingFlash: FileFlashTarget | null = null;
+	let handledFlash = 0;
+	let flashTimer: ReturnType<typeof setTimeout> | null = null;
+
+	$effect(() => {
+		if (!flash || flash.requestId === handledFlash) return;
+		handledFlash = flash.requestId;
+		pendingFlash = flash;
+		clearFileFlash(tabId, flash.requestId);
+		if (hasChanges || filePath.startsWith('untitled:')) {
+			applyFlash();
+		} else {
+			void loadFile(filePath);
+		}
+	});
+
+	function applyFlash() {
+		if (!view || !pendingFlash) return;
+		const target = pendingFlash;
+		pendingFlash = null;
+		const doc = view.state.doc;
+		const text = target.text.replace(/\r\n/g, '\n');
+		const content = doc.toString();
+		let at = text ? content.indexOf(text) : -1;
+		if (at < 0 && text) {
+			// Fall back to the first non-blank line of the edit.
+			const firstLine = text.split('\n').find((l) => l.trim());
+			at = firstLine ? content.indexOf(firstLine) : -1;
+		}
+		if (at < 0) at = 0;
+		const end = Math.min(content.length, at + Math.max(text.length - 1, 0));
+		const fromLine = doc.lineAt(at).number;
+		const toLine = Math.min(doc.lineAt(end).number, fromLine + 200);
+		view.dispatch({
+			effects: [
+				setFlashLinesEffect.of({ from: fromLine, to: toLine }),
+				EditorView.scrollIntoView(doc.line(fromLine).from, { y: 'center' })
+			]
+		});
+		if (flashTimer) clearTimeout(flashTimer);
+		flashTimer = setTimeout(() => {
+			view?.dispatch({ effects: setFlashLinesEffect.of(null) });
+		}, 2500);
+	}
+
 	function applySearchTarget() {
 		if (!view || !searchTarget || appliedSearchTarget === searchTarget.requestId) return;
 		const target = searchTarget;
@@ -912,6 +986,7 @@
 		const extensions = [
 			lineNumbers(),
 			gitLineChangeField,
+			flashLinesField,
 			highlightActiveLineGutter(),
 			highlightSpecialChars(),
 			history(),
@@ -966,6 +1041,10 @@
 				},
 				'.cm-activeLineGutter': { backgroundColor: 'var(--app-hover)' },
 				'.cm-activeLine': { backgroundColor: 'var(--app-hover)' },
+				'.cm-agent-edit-flash': {
+					backgroundColor: dark ? 'rgba(52, 211, 153, 0.16)' : 'rgba(16, 185, 129, 0.14)',
+					transition: 'background-color 0.6s ease'
+				},
 				'.cm-lineNumbers .cm-gutterElement.cm-git-line-added': {
 					boxShadow: `inset 0.125rem 0 0 ${dark ? 'rgba(52, 211, 153, 0.75)' : 'rgba(5, 150, 105, 0.65)'}`
 				},
@@ -981,6 +1060,7 @@
 		view = new EditorView({ state, parent: editorEl });
 		applyGitLineChanges();
 		applySearchTarget();
+		applyFlash();
 
 		// Watch for theme changes and rebuild editor
 		themeObserver = new MutationObserver(() => {

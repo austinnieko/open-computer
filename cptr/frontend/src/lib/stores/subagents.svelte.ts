@@ -203,3 +203,8 @@ export function toMs(t: number | null | undefined): number {
 	if (t < 1e11) return t * 1000;
 	return t;
 }
+
+/** The tracked parent chat a sub-agent chat belongs to, if any. */
+export function parentOf(chatId: string): string | null {
+	return childToParent[chatId] ?? null;
+}

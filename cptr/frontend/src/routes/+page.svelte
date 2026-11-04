@@ -1056,6 +1056,7 @@
 							tabId={tab.id}
 							edit={tab.edit === true}
 							searchTarget={tab.searchTarget}
+							flash={tab.flash}
 						/>
 					</div>
 				{/each}
@@ -1418,6 +1419,7 @@
 						tabId={tab.id}
 						edit={tab.edit === true}
 						searchTarget={tab.searchTarget}
+						flash={tab.flash}
 					/>
 				</div>
 			{/each}
