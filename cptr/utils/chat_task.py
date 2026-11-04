@@ -1486,6 +1486,43 @@ def _default_base_url(provider: str) -> str:
 # ── The agentic loop ────────────────────────────────────────
 
 
+_naming_chats: set[str] = set()
+_background_title_tasks: set[asyncio.Task] = set()
+
+
+async def name_chat_if_untitled(
+    chat_id: str, user_id: str, connection: dict | None, model: str
+) -> None:
+    """Name a chat that still has its auto-truncated title (first 50 chars).
+
+    Started as soon as a turn begins, so long agent runs get a name right away
+    rather than when their first reply finishes; run again after the turn as a
+    backup. Never raises.
+    """
+    if chat_id in _naming_chats:
+        return
+    _naming_chats.add(chat_id)
+    try:
+        chat_obj = await Chat.get_by_id(chat_id)
+        if not chat_obj:
+            return
+        all_msgs = await ChatMessage.get_all_by_chat(chat_id)
+        first_user = next(
+            (m for m in all_msgs if m.role == "user" and not (m.meta and m.meta.get("queued"))),
+            None,
+        )
+        if not first_user:
+            return
+        # The router sets title = content[:50] on creation; only replace that.
+        fallback = first_user.content[:50].strip() or "New Chat"
+        if chat_obj.title == fallback:
+            await generate_chat_title(chat_id, user_id, connection, model, first_user.content)
+    except Exception:
+        logger.debug("[title] Error in title generation for chat %s", chat_id[:8], exc_info=True)
+    finally:
+        _naming_chats.discard(chat_id)
+
+
 async def run_chat_task(
     request,
     *,
@@ -1963,6 +2000,14 @@ async def run_chat_task(
     # them, which used to raise and silently skip naming the chat.
     connection: dict | None = None
     model = ""
+    if not isinstance(target, AgentModelTarget):
+        connection = target.connection
+        model = target.runtime_model
+    # Name the chat now instead of after the reply, which for agent runs can
+    # take many minutes. Held in a set so the task isn't garbage-collected.
+    _title_task = asyncio.create_task(name_chat_if_untitled(chat_id, user_id, connection, model))
+    _background_title_tasks.add(_title_task)
+    _title_task.add_done_callback(_background_title_tasks.discard)
     try:
         if isinstance(target, AgentModelTarget):
             await _run_agent_target(target)
@@ -2975,35 +3020,8 @@ async def run_chat_task(
             await export_chat_to_file(request, chat_id)
         except Exception:
             logger.exception(f"Failed to export chat {chat_id}")
-        # Generate a proper title if the chat still has the auto-truncated fallback
-        try:
-            chat_obj = await Chat.get_by_id(chat_id)
-            if chat_obj:
-                all_msgs = await ChatMessage.get_all_by_chat(chat_id)
-                first_user = next(
-                    (
-                        m
-                        for m in all_msgs
-                        if m.role == "user" and not (m.meta and m.meta.get("queued"))
-                    ),
-                    None,
-                )
-                if first_user:
-                    # The router sets title = content[:50] on creation.
-                    # Only generate if the title still matches that fallback.
-                    fallback = first_user.content[:50].strip() or "New Chat"
-                    if chat_obj.title == fallback:
-                        await generate_chat_title(
-                            chat_id,
-                            user_id,
-                            connection,
-                            model,
-                            first_user.content,
-                        )
-        except Exception:
-            logger.debug(
-                "[title] Error in title generation for chat %s", chat_id[:8], exc_info=True
-            )
+        # Backup for the early naming started with the turn (it may have failed).
+        await name_chat_if_untitled(chat_id, user_id, connection, model)
         # Best-effort post-turn memory review. Runs detached and never competes
         # with queued user input processing.
         try:

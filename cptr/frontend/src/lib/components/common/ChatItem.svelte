@@ -70,9 +70,11 @@
 				? 'font-medium text-gray-800 dark:text-gray-200'
 				: 'text-gray-500 dark:text-gray-500'}">{chat.title}</span
 	>
-	<span class="text-[0.625rem] text-gray-300 dark:text-gray-700 shrink-0 tabular-nums"
-		>{formatTime(chat.updated_at)}</span
-	>
+	{#if chat.updated_at}
+		<span class="text-[0.625rem] text-gray-300 dark:text-gray-700 shrink-0 tabular-nums"
+			>{formatTime(chat.updated_at)}</span
+		>
+	{/if}
 	{#if onclose}
 		<button
 			class="flex items-center justify-center w-5 h-5 rounded shrink-0 text-gray-400 opacity-0 group-hover/chat:opacity-100 {isSelected

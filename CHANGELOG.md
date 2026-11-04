@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 🗂️ **Open several chats at once again, listed in the sidebar.** 0.9.28 limited each pane to one chat, so opening a chat closed the one you had. Chats now stay open until you close them, as they did when they were tabs. Instead of tabs across the top, your open chats are listed first under the workspace in the sidebar. The one you're viewing is highlighted, and each has an × to close it. Your other recent chats follow below a divider. Clicking an open chat switches to it, including from a file. Starting a new chat adds it to the open list.
 
+### Fixed
+
+- 🏷️ **Chats are named right away.** A chat used to be named only after its first reply finished, so a long agent run kept the raw first 50 characters of your message as its title (in the sidebar and above the chat) for many minutes. Naming now starts as soon as you send the first message, and runs again after the reply if that first attempt failed.
+- 🕒 **No stray date on a new chat.** An unsent new chat in the sidebar no longer shows "Dec 31" as its time.
+
 ## [0.9.29] - 2026-11-04
 
 ### Changed
