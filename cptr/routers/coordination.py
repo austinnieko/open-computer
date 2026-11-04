@@ -26,8 +26,10 @@ from cptr.utils.coordination import (
     validation,
 )
 from cptr.utils.coordination import worktrees as wt
+from cptr.utils.chat_export import chat_directory
 from cptr.utils.config import now_ms
 from cptr.utils.identity import ExecutionIdentity
+from cptr.utils.runtime import FileError, Runtime
 from cptr.socket.main import emit_to_user
 
 router = APIRouter(prefix="/api/coordination", tags=["coordination"])
@@ -106,6 +108,32 @@ class ConflictStatusRequest(BaseModel):
     status: str  # acknowledged | resolved | open
 
 
+# Task chats whose sidebar file is known to exist (skips re-checking each poll).
+_chat_files_ok: set[str] = set()
+
+
+async def _ensure_chat_file(request: Request, workspace: str, chat_id: str) -> None:
+    """Give a task chat the empty chat file a normal new chat gets.
+
+    The sidebar lists a workspace's chats from these files, so without one an
+    open task chat shows as a bare row with no time or menu, and can't be
+    deleted from the sidebar. Never overwrites an existing file.
+    """
+    if chat_id in _chat_files_ok:
+        return
+    path = str(chat_directory(workspace) / f"{chat_id}.json")
+    try:
+        try:
+            await Runtime.stat(request, path)
+        except FileError as exc:
+            if exc.status_code != 404:
+                return
+            await Runtime.write_file(request, path, "{}")
+        _chat_files_ok.add(chat_id)
+    except Exception:  # never fail a task request over the sidebar file
+        pass
+
+
 @router.get("/tasks")
 async def list_tasks(request: Request, root: str):
     user_id = _user_id(request)
@@ -119,6 +147,10 @@ async def list_tasks(request: Request, root: str):
     tasks = await CoordTask.query(user_id=user_id, repo_key=repo.key)
     deps = await CoordTaskDep.all_for_repo(repo.key)
     active = get_active_chat_ids()
+    # Backfill task chats created before they got a chat file.
+    for t in tasks:
+        if t.chat_id:
+            await _ensure_chat_file(request, repo.main_root, t.chat_id)
     return {
         "repo_root": repo.main_root,
         "repo_key": repo.key,
@@ -305,6 +337,7 @@ async def register(request: Request, body: RegisterTaskRequest):
             meta["last_model"] = body.model_id
         chat = await Chat.create(user_id, body.title.strip()[:120], meta=meta, created_at=now_ms())
         body.chat_id = chat.id
+        await _ensure_chat_file(request, repo.main_root, chat.id)
     try:
         result = await registry.register_task(
             user_id=user_id,

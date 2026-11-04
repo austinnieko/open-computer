@@ -188,6 +188,34 @@ class EndDeleteTests(ApiTestCase):
         self.assertNotIn("Task: Add export", second)
 
 
+class ChatFileTests(ApiTestCase):
+    """Task chats get the sidebar chat file a normal new chat gets."""
+
+    def _chat_file(self, chat_id: str) -> Path:
+        return self.repo / ".cptr" / "chats" / f"{chat_id}.json"
+
+    async def test_create_chat_writes_sidebar_file(self):
+        body = {"root": str(self.repo), "title": "Listed", "create_chat": True, "model_id": "m"}
+        task = (await self.post("/tasks", body)).json()["task"]
+        self.assertTrue(self._chat_file(task["chat_id"]).exists())
+        listed = (await self.client.get(f"/api/chats?workspace={self.repo}")).json()
+        self.assertIn(task["chat_id"], [c["id"] for c in listed["chats"]])
+
+    async def test_listing_backfills_missing_file_without_overwriting(self):
+        from cptr.routers import coordination as coord_router
+
+        body = {"root": str(self.repo), "create_chat": True, "model_id": "m"}
+        old = (await self.post("/tasks", {**body, "title": "Old"})).json()["task"]
+        kept = (await self.post("/tasks", {**body, "title": "Kept"})).json()["task"]
+        self._chat_file(old["chat_id"]).unlink()  # as if created before the fix
+        self._chat_file(kept["chat_id"]).write_text('{"id": "real"}')
+        coord_router._chat_files_ok.clear()
+
+        await self.client.get(f"/api/coordination/tasks?root={self.repo}")
+        self.assertEqual(self._chat_file(old["chat_id"]).read_text(), "{}")
+        self.assertEqual(self._chat_file(kept["chat_id"]).read_text(), '{"id": "real"}')
+
+
 class UsageTests(ApiTestCase):
     async def test_usage_sums_task_chats_and_totals(self):
         from cptr.models.chats import ChatMessage

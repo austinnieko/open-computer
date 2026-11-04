@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 🅰️ **Tell agents from chats in the sidebar.** Each chat row has a small badge: **A** for a task's agent chat, coloured by the task's status (green running, blue waiting for you, amber paused or blocked, purple in review, red failed, grey done), and **C** for a normal chat, green while it is working. Hover the badge for the status.
+- 🧭 **Agents & tasks from the sidebar.** A workspace's ⋯ menu now opens its Agents & tasks dashboard, even from Home.
 - 🤝 **Multi-agent coordination.** Several coding agents can now work on the same repository at once without overwriting each other. Each task gets its own branch, its own worktree beside the repo, and an agent chat that runs inside that worktree. Conflicts between tasks are detected from Git, graded info, potential, confirmed or blocking, and shown with their evidence. A blocking conflict pauses only the dependent task, and each affected agent is told on its next turn. Tasks wait for the tasks they depend on, and at most 2 write code at once per repository. Finished branches are merged in dependency order and tested together in a separate integration worktree; if the combined tests fail, the task that broke them is asked for a fix. PRs are published only when you confirm, never duplicated, and never merged for you. Your base branch is never touched.
 - 📋 **Agents & tasks dashboard.** Open it from **+** in any Git workspace to see every task's status, branch, worktree, conflicts, dependencies, test results, messages and PR. From there you can open a task's chat or worktree, view its diff, pause, resume or retry it, run tests, integrate, and publish a PR. **New task** creates the branch, the worktree and the chat in one step.
 - 🏷️ **Task chats say where they run.** A chat that belongs to a task shows a **Task worktree** chip in its header with the task's branch and live status. Click it to open the task in Agents & tasks.
@@ -17,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 🗂️ **Task chats behave like other chats in the sidebar.** A chat made by New task now gets its chat file straight away (older ones are filled in when the Agents dashboard loads), so it shows its time and ⋯ menu instead of a bare row. Deleting a chat that is open now also closes it, so its row goes away.
 - 🤖 **New tasks start with your default model.** The Model picker in the New task form now starts on the default model, like a new chat, instead of "Current model".
 - 📊 **Chat stats no longer cover the messages.** The panel overlapped the chat when the app's text size or the browser font was larger than default. It now docks beside the chat only when there is room for it at the current text size, and otherwise opens as a floating panel.
 - 📂 **Resumed agent sessions stay in the right folder.** Resuming a coding-agent session no longer reopens a session that was started in a different folder.
