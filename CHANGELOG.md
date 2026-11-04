@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 🤖 **New tasks start with your default model.** The Model picker in the New task form now starts on the default model, like a new chat, instead of "Current model".
 - 📊 **Chat stats no longer cover the messages.** The panel overlapped the chat when the app's text size or the browser font was larger than default. It now docks beside the chat only when there is room for it at the current text size, and otherwise opens as a floating panel.
 - 📂 **Resumed agent sessions stay in the right folder.** Resuming a coding-agent session no longer reopens a session that was started in a different folder.
 - 📂 **External OpenCode 1.x servers use the chat's folder.** They now receive the chat's directory instead of running in their own startup folder.
