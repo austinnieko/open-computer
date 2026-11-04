@@ -258,7 +258,25 @@ async def on_turn_start(chat_id: str, chat_meta: dict | None) -> str:
     task = await CoordTask.get_by_id(task_id)
     if not task or task.chat_id != chat_id:
         return ""
-    if task.status in {"queued", "paused"}:
+    blockers = task.blockers or []
+    correcting = (
+        task.status == "blocked"
+        and blockers
+        and all(b.get("kind") == "needs_correction" for b in blockers)
+    )
+    if correcting:
+        # The agent is now working on the requested fix.
+        meta = {**(task.meta or {}), "last_correction": blockers}
+        meta.pop("status_before_block", None)
+        await CoordTask.update_fields(
+            task.id, expect_status="blocked", status="running", blockers=[], meta=meta
+        )
+        await _emit(
+            {task.user_id},
+            {"type": "coord:task", "task": (await CoordTask.get_by_id(task.id)).to_dict()},
+        )
+        task = await CoordTask.get_by_id(task.id)
+    elif task.status in {"queued", "paused"}:
         await CoordTask.update_fields(task.id, expect_status=task.status, status="running")
         await _emit(
             {task.user_id},

@@ -9,12 +9,22 @@ from cptr.models.chats import Chat
 from cptr.models.coordination import (
     CoordClaim,
     CoordConflict,
+    CoordIntegration,
     CoordMessage,
     CoordTask,
     CoordTaskDep,
 )
-from cptr.routers.git import _root_identity
-from cptr.utils.coordination import coordinator, messages, registry, scheduler
+from cptr.routers.git import _require_gh_mutation_allowed, _root_identity
+from cptr.utils import gh
+from cptr.utils.coordination import (
+    coordinator,
+    integration,
+    messages,
+    prs,
+    registry,
+    scheduler,
+    validation,
+)
 from cptr.utils.coordination import worktrees as wt
 from cptr.utils.identity import ExecutionIdentity
 from cptr.socket.main import emit_to_user
@@ -57,6 +67,8 @@ class RegisterTaskRequest(BaseModel):
     isolate: bool = True
     start_prompt: str | None = None
     model_id: str | None = None
+    test_command: str | None = None
+    targeted_test_command: str | None = None
 
 
 class BindChatRequest(BaseModel):
@@ -140,6 +152,8 @@ async def register(request: Request, body: RegisterTaskRequest):
             isolate=body.isolate,
             start_prompt=body.start_prompt,
             model_id=body.model_id,
+            test_command=body.test_command,
+            targeted_test_command=body.targeted_test_command,
             identity=identity,
         )
     except (registry.CoordinationError, wt.WorktreeError) as exc:
@@ -290,3 +304,115 @@ async def scan(request: Request, root: str):
     repo_key = await _repo_key(request, root)
     await _owned_repo(request, repo_key)
     return await coordinator.refresh(repo_key)
+
+
+class IntegrationRequest(BaseModel):
+    root: str
+    task_ids: list[str] | None = None
+    run_tests: bool = True
+
+
+class PublishRequest(BaseModel):
+    confirm: bool = False
+    draft: bool = False
+
+
+class CorrectionRequest(BaseModel):
+    note: str | None = None
+
+
+@router.post("/tasks/{task_id}/validate")
+async def validate(request: Request, task_id: str):
+    task = await _own_task(request, task_id)
+    _, identity = await _identity(request, task.repo_root)
+    try:
+        result = await validation.validate_task(task.id, identity)
+    except registry.CoordinationError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await _emit(task.user_id, (await CoordTask.get_by_id(task.id)).to_dict())
+    return result
+
+
+@router.get("/tasks/{task_id}/readiness")
+async def readiness(request: Request, task_id: str):
+    task = await _own_task(request, task_id)
+    _, identity = await _identity(request, task.repo_root)
+    reasons = await validation.readiness(task, {task.id}, identity)
+    return {"ready": not reasons, "reasons": reasons}
+
+
+@router.post("/integrations")
+async def request_integration(request: Request, body: IntegrationRequest):
+    """Start an integration run in a separate worktree. Never merges into the base branch."""
+    user_id = _user_id(request)
+    root, identity = await _identity(request, body.root)
+    try:
+        repo = await wt.repo_identity(root, identity)
+        return await integration.start(
+            user_id=user_id,
+            repo_key=repo.key,
+            task_ids=body.task_ids,
+            run_tests=body.run_tests,
+            identity=identity,
+        )
+    except (registry.CoordinationError, wt.WorktreeError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/integrations")
+async def list_integrations(request: Request, root: str):
+    repo_key = await _repo_key(request, root)
+    user_id = _user_id(request)
+    runs = [r for r in await CoordIntegration.query(repo_key) if r.user_id == user_id]
+    return {"integrations": [r.to_dict() for r in runs]}
+
+
+@router.get("/integrations/{run_id}")
+async def get_integration(request: Request, run_id: str):
+    run = await CoordIntegration.get_by_id(run_id)
+    if not run or run.user_id != _user_id(request):
+        raise HTTPException(404, "integration not found")
+    return run.to_dict()
+
+
+@router.post("/tasks/{task_id}/pr")
+async def publish_pr(request: Request, task_id: str, body: PublishRequest):
+    """Push the task branch and create or refresh its PR. Requires ``confirm: true``.
+
+    There is no merge endpoint: merging stays in the Git panel, by the user.
+    """
+    task = await _own_task(request, task_id)
+    _, identity = await _identity(request, task.repo_root)
+    _require_gh_mutation_allowed(request, identity)
+    try:
+        result = await prs.ensure_pr(
+            task.id, identity=identity, user_confirmed=body.confirm, draft=body.draft
+        )
+    except (prs.PrError, gh.GhError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await _emit(task.user_id, (await CoordTask.get_by_id(task.id)).to_dict())
+    return result
+
+
+@router.post("/tasks/{task_id}/correction")
+async def request_correction(request: Request, task_id: str, body: CorrectionRequest):
+    """Ask the task's agent to fix what integration found (starts one agent turn)."""
+    task = await _own_task(request, task_id)
+    issues = [b for b in (task.blockers or []) if b.get("kind") == "needs_correction"]
+    if not issues and not body.note:
+        raise HTTPException(409, "nothing to correct")
+    if not task.chat_id:
+        raise HTTPException(409, "task has no agent chat")
+    prompt = "The coordinator needs a correction on this task before it can be integrated:\n"
+    prompt += "\n".join(f"- {b.get('detail')} (integration run {b.get('run_id')})" for b in issues)
+    if body.note:
+        prompt += f"\n\nNote from the user: {body.note}"
+    prompt += (
+        "\n\nFix it in this worktree only, commit, re-run the tests, then call "
+        "coordinate(action='ready') or say you are done."
+    )
+    try:
+        message_id = await scheduler.launch_turn(task.chat_id, task.user_id, prompt)
+    except registry.CoordinationError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"message_id": message_id}

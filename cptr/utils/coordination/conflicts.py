@@ -407,7 +407,9 @@ async def scan(
         upserted.append((row, change))
     resolved = []
     for row in await CoordConflict.query(repo_key, statuses={"open", "acknowledged"}):
-        if row.id not in seen and row.kind != "dependency_cycle":
+        # Cycles and integration-merge results are not re-derived by a scan: they are
+        # resolved by an explicit action (removing the edge, a passing integration).
+        if row.id not in seen and row.kind not in {"dependency_cycle", "integration_merge"}:
             await CoordConflict.set_status(row.id, "resolved")
             row.status = "resolved"
             resolved.append(row)

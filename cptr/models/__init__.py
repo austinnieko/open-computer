@@ -17,6 +17,7 @@ from cptr.models.automations import Automation, AutomationRun
 from cptr.models.coordination import (
     CoordClaim,
     CoordConflict,
+    CoordIntegration,
     CoordMessage,
     CoordTask,
     CoordTaskDep,
@@ -43,4 +44,5 @@ __all__ = [
     "CoordClaim",
     "CoordConflict",
     "CoordMessage",
+    "CoordIntegration",
 ]

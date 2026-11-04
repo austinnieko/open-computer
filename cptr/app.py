@@ -72,6 +72,9 @@ async def lifespan(app: FastAPI):
         await reconcile_coordination(
             active_chat_ids=get_active_chat_ids(), identity_for_user=identity_for_user_id
         )
+        from cptr.utils.coordination.integration import reconcile as reconcile_integrations
+
+        await reconcile_integrations()
     except Exception:
         _logging.getLogger(__name__).exception("coordination reconcile failed")
 

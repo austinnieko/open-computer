@@ -87,6 +87,8 @@ async def register_task(
     isolate: bool = True,
     start_prompt: str | None = None,
     model_id: str | None = None,
+    test_command: str | None = None,
+    targeted_test_command: str | None = None,
     identity: ExecutionIdentity | None = None,
 ) -> dict[str, Any]:
     """Register a coding task, reusing an existing one when it is the same work.
@@ -147,6 +149,10 @@ async def register_task(
         meta: dict[str, Any] = {"isolated": isolate}
         if base_branch:
             meta["base_branch"] = base_branch
+        if test_command:
+            meta["test_command"] = test_command
+        if targeted_test_command:
+            meta["targeted_test_command"] = targeted_test_command
         if start_prompt:
             if not chat_id:
                 raise CoordinationError("A start prompt needs a chat to run in")

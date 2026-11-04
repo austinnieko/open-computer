@@ -554,3 +554,84 @@ class CoordMessage(Base):
                 )
             result = await db.execute(stmt.order_by(CoordMessage.created_at.desc()).limit(limit))
             return list(result.scalars().all())
+
+
+class CoordIntegration(Base):
+    """One coordinator integration run: task branches merged in order and tested.
+
+    The integration branch and worktree are kept afterwards for traceability.
+    Nothing here ever merges into the base branch or a GitHub PR.
+    """
+
+    __tablename__ = "coord_integrations"
+
+    id = Column(Text, primary_key=True, default=lambda: f"int_{uuid.uuid4().hex[:10]}")
+    user_id = Column(Text, nullable=False)
+    repo_key = Column(Text, nullable=False)
+    status = Column(Text, nullable=False)  # running | passed | failed | interrupted
+    base_branch = Column(Text, nullable=True)
+    base_sha = Column(Text, nullable=True)
+    branch = Column(Text, nullable=True)
+    worktree_path = Column(Text, nullable=True)
+    task_order = Column(JSON, nullable=True)  # [task_id]
+    steps = Column(JSON, nullable=True)  # [{task_id, result, commit?, files?, reason?}]
+    tests = Column(JSON, nullable=True)  # {command, exit_code, output_tail, attributed_to?}
+    summary = Column(Text, nullable=True)
+    created_at = Column(BigInteger, nullable=False)
+    updated_at = Column(BigInteger, nullable=False)
+
+    __table_args__ = (Index("ix_coord_integrations_repo", "repo_key", "created_at"),)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "repo_key": self.repo_key,
+            "status": self.status,
+            "base_branch": self.base_branch,
+            "base_sha": self.base_sha,
+            "branch": self.branch,
+            "worktree_path": self.worktree_path,
+            "task_order": self.task_order or [],
+            "steps": self.steps or [],
+            "tests": self.tests,
+            "summary": self.summary,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @staticmethod
+    async def create(**fields) -> CoordIntegration:
+        now = now_ms()
+        row = CoordIntegration(created_at=now, updated_at=now, **fields)
+        async with await get_db() as db:
+            db.add(row)
+            await db.commit()
+        return row
+
+    @staticmethod
+    async def get_by_id(run_id: str) -> CoordIntegration | None:
+        async with await get_db() as db:
+            result = await db.execute(select(CoordIntegration).where(CoordIntegration.id == run_id))
+            return result.scalar_one_or_none()
+
+    @staticmethod
+    async def query(repo_key: str | None = None, *, status: str | None = None, limit: int = 50):
+        async with await get_db() as db:
+            stmt = select(CoordIntegration)
+            if repo_key:
+                stmt = stmt.where(CoordIntegration.repo_key == repo_key)
+            if status:
+                stmt = stmt.where(CoordIntegration.status == status)
+            result = await db.execute(
+                stmt.order_by(CoordIntegration.created_at.desc()).limit(limit)
+            )
+            return list(result.scalars().all())
+
+    @staticmethod
+    async def update_fields(run_id: str, **fields) -> None:
+        fields["updated_at"] = now_ms()
+        async with await get_db() as db:
+            await db.execute(
+                update(CoordIntegration).where(CoordIntegration.id == run_id).values(**fields)
+            )
+            await db.commit()
