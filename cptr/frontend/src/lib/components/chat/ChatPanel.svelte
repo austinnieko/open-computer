@@ -379,7 +379,25 @@
 
 	// Stats beside the conversation: docked in the side space when the pane is
 	// wide enough, otherwise opened on demand over the chat.
-	const STATS_DOCK_WIDTH = 1280;
+	// The message column (max-w-2xl, 42rem) and the dock (17rem + 1rem inset)
+	// are sized in rem, so the cutoff must be too: with a larger text size or
+	// browser font, a fixed px cutoff docks the panel on top of the messages.
+	// 42rem + 2 × 19rem (dock + inset + 1rem gap) = 80rem; 82rem leaves room
+	// for the scrollbar.
+	const STATS_DOCK_REM = 82;
+	let remPx = $state(16);
+	$effect(() => {
+		const root = document.documentElement;
+		const read = () => {
+			remPx = parseFloat(getComputedStyle(root).fontSize) || 16;
+		};
+		read();
+		// The app's text-size setting writes --app-text-scale on <html>.
+		const observer = new MutationObserver(read);
+		observer.observe(root, { attributes: true, attributeFilter: ['style', 'class'] });
+		return () => observer.disconnect();
+	});
+	const STATS_DOCK_WIDTH = $derived(STATS_DOCK_REM * remPx);
 	let panelWidth = $state(0);
 	let statsOverlay = $state(false);
 	const statsOn = $derived($chatStatsOn);

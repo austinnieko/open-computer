@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 📊 **Chat stats no longer cover the messages.** The panel overlapped the chat when the app's text size or the browser font was larger than default. It now docks beside the chat only when there is room for it at the current text size, and otherwise opens as a floating panel.
 - 📂 **Resumed agent sessions stay in the right folder.** Resuming a coding-agent session no longer reopens a session that was started in a different folder.
 - 📂 **External OpenCode 1.x servers use the chat's folder.** They now receive the chat's directory instead of running in their own startup folder.
 - 🔑 **GitHub sign-in works with older GitHub CLI versions.** The GitHub settings no longer show "unknown flag: --json" with gh releases that lack it, such as the 2.45 package in Ubuntu; your signed-in accounts now show up.
