@@ -29,6 +29,8 @@ export interface CoordState {
 	error: string;
 	notRepo: boolean;
 	repoRoot: string;
+	/** The folder this dashboard was opened from (resolved by the server). */
+	viewRoot: string;
 	tasks: CoordTask[];
 	dependencies: { task_id: string; depends_on: string }[];
 	conflicts: CoordConflict[];
@@ -60,6 +62,7 @@ function empty(): CoordState {
 		error: '',
 		notRepo: false,
 		repoRoot: '',
+		viewRoot: '',
 		maxWriters: 2,
 		tasks: [],
 		dependencies: [],
@@ -129,6 +132,7 @@ export async function refresh(root: string): Promise<void> {
 		]);
 		if (seq !== entry.seq) return;
 		entry.state.repoRoot = tasks.repo_root;
+		entry.state.viewRoot = tasks.root ?? root;
 		entry.state.tasks = tasks.tasks;
 		if (tasks.limits) entry.state.maxWriters = tasks.limits.max_writers;
 		entry.state.dependencies = tasks.dependencies;

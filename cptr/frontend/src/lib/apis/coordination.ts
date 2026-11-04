@@ -43,6 +43,8 @@ export interface CoordTask {
 	id: string;
 	repo_key: string;
 	repo_root: string;
+	/** This folder, resolved; compare with each task's meta.origin_root. */
+	root?: string;
 	title: string;
 	description: string | null;
 	status: TaskStatus;
@@ -133,6 +135,8 @@ export interface CoordIntegration {
 
 export interface TaskListResponse {
 	repo_root: string;
+	/** This folder, resolved; compare with each task's meta.origin_root. */
+	root?: string;
 	repo_key: string;
 	active_chats: string[];
 	tasks: CoordTask[];

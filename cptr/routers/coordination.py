@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -144,6 +146,45 @@ async def _ensure_chat_file(request: Request, workspace: str, chat_id: str) -> N
         pass
 
 
+async def _origin_for_legacy(
+    task: CoordTask, repo: wt.RepoIdentity, branch_paths: dict[str, str]
+) -> str:
+    """Best guess at the folder an older task was started from: the worktree that
+    has its base branch checked out, else the repository's main checkout."""
+    base = (task.meta or {}).get("base_branch") or task.base_ref or ""
+    return branch_paths.get(base, repo.main_root)
+
+
+async def _file_chat_under(request: Request, chat_id: str, origin: str) -> None:
+    """Make the task chat belong to ``origin`` (the folder the task started from):
+    its workspace and its sidebar file. The old file is removed only after the new
+    one exists; nothing happens if the chat is already there."""
+    chat = await Chat.get_by_id(chat_id)
+    if not chat:
+        return
+    current = (chat.meta or {}).get("workspace")
+    if current and os.path.realpath(current) == origin:
+        await _ensure_chat_file(request, origin, chat_id)
+        return
+    await Chat.update_meta(
+        chat_id, {**(chat.meta or {}), "workspace": origin}, updated_at=chat.updated_at or 0
+    )
+    _chat_files_ok.discard(chat_id)
+    # Write the chat's file in its new folder first (rebuilt from the database),
+    # then drop the old copy, which would otherwise list it in both folders.
+    from cptr.utils.chat_export import export_chat_to_file
+
+    await export_chat_to_file(request, chat_id)
+    if current:
+        old = str(chat_directory(current) / f"{chat_id}.json")
+        try:
+            await Runtime.stat(request, str(chat_directory(origin) / f"{chat_id}.json"))
+            await Runtime.delete_item(request, old)
+        except Exception:  # noqa: BLE001 - never fail the task list over a file
+            pass
+    await _ensure_chat_file(request, origin, chat_id)
+
+
 class LimitsRequest(BaseModel):
     max_writers: int | None = Field(default=None, ge=1, le=16)
     # Minutes before an agent waiting on its own background work is nudged; 0 = never.
@@ -197,14 +238,29 @@ async def list_tasks(request: Request, root: str):
     from cptr.utils.chat_task import get_active_chat_ids
 
     tasks = await CoordTask.query(user_id=user_id, repo_key=repo.key)
+    # Which folder each task was started from (older tasks: inferred once).
+    legacy = [t for t in tasks if not (t.meta or {}).get("origin_root")]
+    if legacy:
+        try:
+            branch_paths = {
+                (w.get("branch") or "").removeprefix("refs/heads/"): os.path.realpath(w["path"])
+                for w in await wt.list_worktrees(repo.main_root, identity)
+                if w.get("branch") and w.get("path")
+            }
+        except Exception:  # noqa: BLE001
+            branch_paths = {}
+        for t in legacy:
+            origin = await _origin_for_legacy(t, repo, branch_paths)
+            await CoordTask.update_fields(t.id, meta={**(t.meta or {}), "origin_root": origin})
+        tasks = await CoordTask.query(user_id=user_id, repo_key=repo.key)
     deps = await CoordTaskDep.all_for_repo(repo.key)
     active = get_active_chat_ids()
     chat_ids = [t.chat_id for t in tasks if t.chat_id]
     existing = {c.id for c in await Chat.get_by_ids(chat_ids)} if chat_ids else set()
-    # Backfill task chats created before they got a chat file.
-    for chat_id in chat_ids:
-        if chat_id in existing:
-            await _ensure_chat_file(request, repo.main_root, chat_id)
+    # Each task chat lives in the sidebar under the folder its task started from.
+    for t in tasks:
+        if t.chat_id in existing and t.chat_id not in _chat_files_ok:
+            await _file_chat_under(request, t.chat_id, t.meta["origin_root"])
 
     def _row(t: CoordTask) -> dict:
         row = t.to_dict()
@@ -214,6 +270,7 @@ async def list_tasks(request: Request, root: str):
 
     return {
         "repo_root": repo.main_root,
+        "root": os.path.realpath(root),  # compare with each task's meta.origin_root
         "repo_key": repo.key,
         "active_chats": sorted(t.chat_id for t in tasks if t.chat_id and t.chat_id in active),
         "tasks": [_row(t) for t in tasks],
@@ -440,21 +497,24 @@ async def get_task(request: Request, task_id: str):
 async def register(request: Request, body: RegisterTaskRequest):
     user_id = _user_id(request)
     root, identity = await _identity(request, body.root)
+    origin = os.path.realpath(root)
     if body.chat_id:
         chat = await Chat.get_by_id(body.chat_id)
         if not chat or chat.user_id != user_id:
             raise HTTPException(404, "chat not found")
     elif body.create_chat:
         try:
-            repo = await wt.repo_identity(root, identity)
+            await wt.repo_identity(root, identity)  # must be a Git repository
         except wt.WorktreeError as exc:
             raise HTTPException(400, str(exc)) from exc
-        meta = {"workspace": repo.main_root}
+        # The chat belongs to the folder the task was started from, so a task
+        # opened from a worktree is listed under that worktree in the sidebar.
+        meta = {"workspace": origin}
         if body.model_id:
             meta["last_model"] = body.model_id
         chat = await Chat.create(user_id, body.title.strip()[:120], meta=meta, created_at=now_ms())
         body.chat_id = chat.id
-        await _ensure_chat_file(request, repo.main_root, chat.id)
+        await _ensure_chat_file(request, origin, chat.id)
     try:
         result = await registry.register_task(
             user_id=user_id,
@@ -476,6 +536,10 @@ async def register(request: Request, body: RegisterTaskRequest):
         )
     except (registry.CoordinationError, wt.WorktreeError) as exc:
         raise HTTPException(409, str(exc)) from exc
+    if (result["task"].get("meta") or {}).get("origin_root") is None and not result.get("reused"):
+        meta = {**(result["task"].get("meta") or {}), "origin_root": origin}
+        await CoordTask.update_fields(result["task"]["id"], meta=meta)
+        result["task"] = (await CoordTask.get_by_id(result["task"]["id"])).to_dict()
     if not body.start_now and (result["task"].get("meta") or {}).get("start"):
         # Keep it a Draft: save the instructions for when the user clicks Start.
         meta = dict(result["task"]["meta"])
