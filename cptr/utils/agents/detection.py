@@ -22,7 +22,11 @@ from cptr.utils.agents.models import (
     model_id_for_profile,
     normalize_agent_profiles,
 )
-from cptr.utils.agents.opencode import opencode_server_url_candidates
+from cptr.utils.agents import opencode_v2
+from cptr.utils.agents.opencode import (
+    opencode_server_url_candidates,
+    resolve_opencode_password,
+)
 
 DETECTION_TTL_SECONDS = 30
 CLAUDE_MODEL_FALLBACKS = [
@@ -148,15 +152,9 @@ async def detect_profile(profile: dict[str, Any]) -> AgentDetection:
         if command is not None:
             code, version_text = await _run_probe([command, "--version"])
             version = version_text.splitlines()[0] if code == 0 and version_text else None
-        models = await _probe_opencode_models(command or raw_command or "opencode", profile)
+        models, error = await _probe_opencode_models(command or raw_command or "opencode", profile)
         if not models:
-            return AgentDetection(
-                "auth_unknown",
-                command,
-                version,
-                "Could not discover OpenCode models. Check connected OpenCode providers.",
-                [],
-            )
+            return AgentDetection("auth_unknown", command, version, error, [])
         return AgentDetection("ready", command, version, None, models)
 
     if command is None and default_claude_command:
@@ -242,15 +240,9 @@ async def detect_profile(profile: dict[str, Any]) -> AgentDetection:
         return AgentDetection("ready", command, version, None, models)
 
     if profile.get("agent") == "opencode":
-        models = await _probe_opencode_models(command, profile)
+        models, error = await _probe_opencode_models(command, profile)
         if not models:
-            return AgentDetection(
-                "auth_unknown",
-                command,
-                version,
-                "Could not discover OpenCode models. Check connected OpenCode providers.",
-                [],
-            )
+            return AgentDetection("auth_unknown", command, version, error, [])
         return AgentDetection("ready", command, version, None, models)
 
     if profile.get("agent") == "cline":
@@ -540,16 +532,27 @@ async def _probe_grok_models(command: str, profile: dict[str, Any]) -> list[str]
         await client.close()
 
 
-async def _probe_opencode_models(command: str, profile: dict[str, Any]) -> list[str] | None:
+_OPENCODE_NO_MODELS = "Could not discover OpenCode models. Check connected OpenCode providers."
+
+
+async def _probe_opencode_models(
+    command: str, profile: dict[str, Any]
+) -> tuple[list[str] | None, str | None]:
+    """Return ``(models, None)`` or ``(None, user-facing reason)``."""
     env = os.environ.copy()
     if profile.get("home"):
         env["HOME"] = os.path.expanduser(str(profile["home"]))
     server_url = str(profile.get("server_url") or "").strip()
-    password = str(profile.get("server_password") or "").strip()
+    managed_password: str | None = None
     proc: asyncio.subprocess.Process | None = None
     try:
         if not server_url:
+            import secrets
+
             port = _free_port()
+            managed_password = str(
+                profile.get("server_password") or ""
+            ).strip() or secrets.token_urlsafe(32)
             proc = await asyncio.create_subprocess_exec(
                 command,
                 "serve",
@@ -557,47 +560,44 @@ async def _probe_opencode_models(command: str, profile: dict[str, Any]) -> list[
                 f"--port={port}",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={**env, "OPENCODE_CONFIG_CONTENT": "{}"},
+                env={
+                    **env,
+                    "OPENCODE_CONFIG_CONTENT": "{}",
+                    "OPENCODE_SERVER_PASSWORD": managed_password,
+                },
             )
             server_url = await _read_opencode_server_url(proc, port)
+        password = resolve_opencode_password(profile, server_url, managed_password)
         headers = {}
         if password:
             import base64
 
             token = base64.b64encode(f"opencode:{password}".encode()).decode()
             headers["Authorization"] = f"Basic {token}"
+        error: str | None = None
         for candidate_url in opencode_server_url_candidates(server_url):
             try:
                 async with httpx.AsyncClient(base_url=candidate_url, timeout=5) as client:
-                    providers = await _opencode_json(
-                        client, ["provider.list", "provider/list", "provider"], headers
-                    )
-                    provider_list = (
-                        providers.get("data")
-                        if isinstance(providers.get("data"), dict)
-                        else providers
-                    )
-                    connected = set(provider_list.get("connected") or [])
-                    all_providers = provider_list.get("all") or []
-                    models: list[str] = []
-                    for provider in all_providers:
-                        if not isinstance(provider, dict):
-                            continue
-                        provider_id = provider.get("id")
-                        if not isinstance(provider_id, str) or provider_id not in connected:
-                            continue
-                        raw_models = provider.get("models")
-                        if isinstance(raw_models, dict):
-                            for model_id in raw_models:
-                                if isinstance(model_id, str) and model_id.strip():
-                                    models.append(f"{provider_id}/{model_id.strip()}")
+                    if await opencode_v2.detect_api_version(client, headers) == opencode_v2.API_V2:
+                        models = await opencode_v2.list_models(client, headers)
+                    else:
+                        models = await _probe_opencode_v1_models(client, headers)
                     if models:
-                        return models
-            except Exception:
-                continue
-        return None
-    except Exception:
-        return None
+                        return models, None
+                    error = _OPENCODE_NO_MODELS
+            except opencode_v2.OpenCodeError as exc:
+                error = str(exc)
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                error = f"Could not connect to the OpenCode server at {candidate_url}."
+            except httpx.TimeoutException:
+                error = f"The OpenCode server at {candidate_url} timed out."
+            except Exception:  # noqa: BLE001 - surfaced as detection status.
+                error = error or _OPENCODE_NO_MODELS
+        return None, error or _OPENCODE_NO_MODELS
+    except opencode_v2.OpenCodeError as exc:
+        return None, str(exc)
+    except Exception:  # noqa: BLE001 - surfaced as detection status.
+        return None, _OPENCODE_NO_MODELS
     finally:
         if proc and proc.returncode is None:
             proc.terminate()
@@ -606,6 +606,29 @@ async def _probe_opencode_models(command: str, profile: dict[str, Any]) -> list[
             if proc.returncode is None:
                 proc.kill()
                 await proc.wait()
+
+
+async def _probe_opencode_v1_models(
+    client: httpx.AsyncClient, headers: dict[str, str]
+) -> list[str]:
+    providers = await _opencode_json(
+        client, ["provider.list", "provider/list", "provider"], headers
+    )
+    provider_list = providers.get("data") if isinstance(providers.get("data"), dict) else providers
+    connected = set(provider_list.get("connected") or [])
+    models: list[str] = []
+    for provider in provider_list.get("all") or []:
+        if not isinstance(provider, dict):
+            continue
+        provider_id = provider.get("id")
+        if not isinstance(provider_id, str) or provider_id not in connected:
+            continue
+        raw_models = provider.get("models")
+        if isinstance(raw_models, dict):
+            for model_id in raw_models:
+                if isinstance(model_id, str) and model_id.strip():
+                    models.append(f"{provider_id}/{model_id.strip()}")
+    return models
 
 
 async def _probe_acp_models(

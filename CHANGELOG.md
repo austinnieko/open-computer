@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.23] - 2026-11-04
+
+### Fixed
+
+- 🧑‍💻 **OpenCode 2.x works as a coding agent.** OpenCode 2.0 moved its API under `/api`, changed how prompts and events are sent, and always requires a password. Computer was still calling the old addresses and getting OpenCode's web page back, so OpenCode profiles failed with "Could not discover OpenCode models". Computer now detects which OpenCode version it is talking to and uses the matching protocol. OpenCode 1.x keeps working as before.
+- 📂 **OpenCode opens your workspace.** New OpenCode sessions now start in the chat's workspace folder, including when OpenCode runs as a separate server.
+- 💭 **OpenCode replies stream cleanly.** Text streams once with no repeats, OpenCode's thinking appears as thoughts, and tool steps show their input and output.
+- 🔑 **Clearer OpenCode connection errors.** A missing or wrong server password, an unreachable server, or a server that fails to start now each gives a specific message instead of a generic one. For a local `opencode serve --service`, Computer uses the password from OpenCode's own `service.json` when the profile has none.
+- 🚀 **Computer-started OpenCode servers work on 2.x.** When Computer starts OpenCode itself, it now gives the server a password it knows, so it can connect.
+- ✋ **OpenCode permission requests are visible.** When OpenCode stops to ask for permission, the chat says so and what it's waiting for, instead of hanging silently. Computer never approves on your behalf.
+
 ## [0.9.22] - 2026-11-03
 
 ### Fixed

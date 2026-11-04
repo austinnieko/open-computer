@@ -7,7 +7,9 @@ import base64
 import json
 import os
 import re
+import secrets
 import socket
+from collections import deque
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -15,6 +17,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from cptr.utils.agents import opencode_v2
 from cptr.utils.agents.attachments import PreparedAgentAttachments
 from cptr.utils.agents.events import (
     AgentDone,
@@ -23,6 +26,7 @@ from cptr.utils.agents.events import (
     AgentTextDelta,
     AgentToolUpdate,
 )
+from cptr.utils.agents.opencode_v2 import OpenCodeError
 from cptr.utils.agents.prompts import turn_prompt_text
 from cptr.utils.identity import env_for, preexec_for
 
@@ -57,17 +61,30 @@ def opencode_server_url_candidates(server_url: str) -> list[str]:
     return [server_url] if docker_url == server_url else [server_url, docker_url]
 
 
-async def _server_url_from_stdout(proc: asyncio.subprocess.Process, port: int) -> str:
+async def _server_url_from_stdout(
+    proc: asyncio.subprocess.Process, port: int, stderr_tail: deque[str] | None = None
+) -> str:
     assert proc.stdout is not None
     fallback = f"http://127.0.0.1:{port}"
     deadline = asyncio.get_running_loop().time() + 5
     while asyncio.get_running_loop().time() < deadline:
-        line = await asyncio.wait_for(proc.stdout.readline(), timeout=1)
+        try:
+            line = await asyncio.wait_for(proc.stdout.readline(), timeout=1)
+        except asyncio.TimeoutError:
+            continue
         if not line:
             break
         match = re.search(r"(https?://[^\s]+)", line.decode(errors="replace"))
         if match:
             return match.group(1)
+    with suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(proc.wait(), timeout=0.2)
+    if proc.returncode is not None:
+        detail = " ".join(stderr_tail or []).strip()
+        raise OpenCodeError(
+            f"OpenCode server exited during startup (code {proc.returncode})"
+            + (f": {detail[-500:]}" if detail else ".")
+        )
     return fallback
 
 
@@ -75,7 +92,7 @@ async def _server_url_from_stdout(proc: asyncio.subprocess.Process, port: int) -
 async def _opencode_server(profile: dict[str, Any], workspace: str, identity=None):
     server_url = str(profile.get("server_url") or "").strip()
     if server_url:
-        yield server_url, None
+        yield server_url, None, None
         return
 
     env = (
@@ -86,6 +103,9 @@ async def _opencode_server(profile: dict[str, Any], workspace: str, identity=Non
     if profile.get("home"):
         env["HOME"] = os.path.expanduser(str(profile["home"]))
     port = _free_port()
+    # OpenCode 2.x always requires a password and invents a random one when none
+    # is given, so the server we start gets one we know. Harmless for 1.x.
+    password = str(profile.get("server_password") or "").strip() or secrets.token_urlsafe(32)
     proc = await asyncio.create_subprocess_exec(
         str(profile["command"]),
         "serve",
@@ -94,12 +114,13 @@ async def _opencode_server(profile: dict[str, Any], workspace: str, identity=Non
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=workspace or os.getcwd(),
-        env={**env, "OPENCODE_CONFIG_CONTENT": "{}"},
+        env={**env, "OPENCODE_CONFIG_CONTENT": "{}", "OPENCODE_SERVER_PASSWORD": password},
         preexec_fn=preexec_for(identity) if identity and identity.is_pam else None,
     )
-    stderr_task = asyncio.create_task(_drain_stderr(proc))
+    stderr_tail: deque[str] = deque(maxlen=20)
+    stderr_task = asyncio.create_task(_drain_stderr(proc, stderr_tail))
     try:
-        yield await _server_url_from_stdout(proc, port), proc
+        yield await _server_url_from_stdout(proc, port, stderr_tail), proc, password
     finally:
         stderr_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -113,18 +134,35 @@ async def _opencode_server(profile: dict[str, Any], workspace: str, identity=Non
                 await proc.wait()
 
 
-async def _drain_stderr(proc: asyncio.subprocess.Process) -> None:
+async def _drain_stderr(proc: asyncio.subprocess.Process, tail: deque[str] | None = None) -> None:
     assert proc.stderr is not None
     while True:
         try:
-            if not await proc.stderr.readline():
-                break
+            line = await proc.stderr.readline()
         except ValueError:
             continue
+        if not line:
+            break
+        if tail is not None:
+            tail.append(line.decode(errors="replace").strip())
 
 
-def _headers(profile: dict[str, Any]) -> dict[str, str]:
+def resolve_opencode_password(
+    profile: dict[str, Any], server_url: str, managed_password: str | None = None
+) -> str:
+    """Profile password, else our managed server's, else a local service's own."""
     password = str(profile.get("server_password") or "").strip()
+    if password or managed_password:
+        return password or str(managed_password)
+    if server_url and opencode_v2.is_loopback(server_url):
+        return opencode_v2.service_config_password(profile.get("home")) or ""
+    return ""
+
+
+def _headers(profile: dict[str, Any], password: str | None = None) -> dict[str, str]:
+    if password is None:
+        password = str(profile.get("server_password") or "")
+    password = password.strip()
     if not password:
         return {}
     token = base64.b64encode(f"opencode:{password}".encode()).decode()
@@ -340,8 +378,14 @@ async def run_opencode_agent(
 ) -> AsyncIterator[AgentEvent]:
     del chat_params
     try:
-        async with _opencode_server(profile, workspace, identity) as (server_url, _proc):
-            headers = _headers(profile)
+        async with _opencode_server(profile, workspace, identity) as (
+            server_url,
+            _proc,
+            managed_password,
+        ):
+            headers = _headers(
+                profile, resolve_opencode_password(profile, server_url, managed_password)
+            )
             urls = opencode_server_url_candidates(server_url)
             last_connect_error: Exception | None = None
             for index, candidate_url in enumerate(urls):
@@ -350,6 +394,21 @@ async def run_opencode_agent(
                         base_url=candidate_url,
                         timeout=httpx.Timeout(None, connect=5),
                     ) as client:
+                        api = await opencode_v2.detect_api_version(client, headers)
+                        if api == opencode_v2.API_V2:
+                            async for event in _run_v2(
+                                client,
+                                headers,
+                                profile=profile,
+                                model=model,
+                                workspace=workspace,
+                                messages=messages,
+                                system_prompt=system_prompt,
+                                resume_state=resume_state,
+                                attachments=attachments,
+                            ):
+                                yield event
+                            return
                         session_id = _resume_session_id(resume_state)
                         resumed = bool(session_id)
                         if session_id is None:
@@ -521,3 +580,164 @@ async def _collect_opencode_events(
     except Exception:
         await queue.put(None)
     await queue.put(None)
+
+
+# ── OpenCode 2.x ───────────────────────────────────────────────────────────
+
+_V2_CONNECT_WAIT_SECONDS = 5
+_V2_START_GRACE_SECONDS = 15
+_V2_IDLE_POLL_SECONDS = 1
+_V2_MAX_RECONNECTS = 5
+
+
+async def _run_v2(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    *,
+    profile: dict[str, Any],
+    model: str,
+    workspace: str,
+    messages: list[dict[str, Any]],
+    system_prompt: str,
+    resume_state: dict[str, Any] | None,
+    attachments: PreparedAgentAttachments,
+) -> AsyncIterator[AgentEvent]:
+    session_id = _resume_session_id(resume_state)
+    if session_id and not await opencode_v2.session_exists(client, headers, session_id):
+        session_id = None
+    resumed = bool(session_id)
+    if session_id is None:
+        session_id = await opencode_v2.create_session(
+            client, headers, model=model, workspace=workspace
+        )
+    elif (resume_state or {}).get("model") != model:
+        await opencode_v2.switch_model(client, headers, session_id, model)
+
+    translator = opencode_v2.EventTranslator(session_id)
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    connected = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def start_stream() -> asyncio.Task:
+        return asyncio.create_task(
+            _collect_v2_events(client, headers, translator, queue, connected)
+        )
+
+    stream_task = start_stream()
+    try:
+        with suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(connected.wait(), timeout=_V2_CONNECT_WAIT_SECONDS)
+        if stream_task.done() and stream_task.exception():
+            raise stream_task.exception()  # e.g. 401 on the event stream
+
+        text = turn_prompt_text(messages, system_prompt, resumed=resumed)
+        files = [
+            {"uri": Path(item.path).resolve().as_uri(), "name": item.name}
+            for item in [*attachments.images, *attachments.files]
+        ]
+        await opencode_v2.prompt(client, headers, session_id, text, files)
+        sent_at = last_activity = loop.time()
+        reconnects = 0
+
+        while not translator.finished:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=_V2_IDLE_POLL_SECONDS)
+            except asyncio.TimeoutError:
+                item = None
+            if item is _OPENCODE_ACTIVITY:
+                last_activity = loop.time()
+                continue
+            if isinstance(item, BaseException):
+                # The event stream dropped; reconnect unless the run already ended.
+                if reconnects >= _V2_MAX_RECONNECTS:
+                    raise OpenCodeError(f"Lost the OpenCode event stream: {item}")
+                reconnects += 1
+                await asyncio.sleep(min(reconnects, 3))
+                stream_task = start_stream()
+                continue
+            if item is not None:
+                last_activity = loop.time()
+                yield item
+                continue
+            # Quiet second: ask OpenCode whether the session is still running.
+            if loop.time() - last_activity < _V2_IDLE_POLL_SECONDS:
+                continue
+            try:
+                active = await asyncio.wait_for(
+                    opencode_v2.is_active(client, headers, session_id), timeout=5
+                )
+            except opencode_v2.OpenCodeAuthError:
+                raise
+            except Exception:  # noqa: BLE001 - transient; keep waiting on events.
+                continue
+            if not active and (
+                translator.started or loop.time() - sent_at > _V2_START_GRACE_SECONDS
+            ):
+                break
+
+        # Drain anything the stream delivered alongside the terminal event.
+        while not queue.empty():
+            item = queue.get_nowait()
+            if item is not _OPENCODE_ACTIVITY and not isinstance(item, BaseException) and item:
+                yield item
+        if translator.error:
+            raise OpenCodeError(translator.error)
+    except asyncio.CancelledError:
+        with suppress(Exception):
+            await asyncio.wait_for(opencode_v2.interrupt(client, headers, session_id), timeout=5)
+        raise
+    finally:
+        stream_task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await stream_task
+
+    yield AgentDone(
+        resume_state={
+            "profile_id": profile["id"],
+            "session_id": session_id,
+            "workspace": workspace,
+            "model": model,
+        }
+    )
+
+
+async def _collect_v2_events(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    translator: opencode_v2.EventTranslator,
+    queue: asyncio.Queue[Any],
+    connected: asyncio.Event,
+) -> None:
+    try:
+        async with client.stream(
+            "GET",
+            "/api/event",
+            headers={**headers, "Accept": "text/event-stream"},
+            timeout=httpx.Timeout(None, connect=5),
+        ) as response:
+            if response.status_code == 401:
+                raise opencode_v2.auth_error(bool(headers.get("Authorization")))
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                envelope = opencode_v2.parse_sse_line(line)
+                if envelope is None:
+                    continue
+                if envelope.get("type") == "server.connected":
+                    connected.set()
+                    continue
+                if not translator.matches(envelope):
+                    continue
+                await queue.put(_OPENCODE_ACTIVITY)
+                for event in translator.translate(envelope):
+                    await queue.put(event)
+                if translator.finished:
+                    await queue.put(None)
+                    return
+        await queue.put(ConnectionError("event stream closed"))
+    except asyncio.CancelledError:
+        raise
+    except opencode_v2.OpenCodeAuthError:
+        connected.set()
+        raise
+    except Exception as exc:  # noqa: BLE001 - reported to the run loop for reconnect.
+        await queue.put(exc)
