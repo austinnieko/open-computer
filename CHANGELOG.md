@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- 🧹 **Deleting a task's chat removes the task too.** Deleting an agent chat from the sidebar now asks first, then removes its task from Agents & tasks; the branch, commits and folder are kept. Tasks whose chat was deleted earlier show **Chat deleted** and can be deleted straight away, without ending them first.
+- 🧹 **Deleting a task's chat removes the task too.** Deleting an agent chat from the sidebar now asks first, then removes its task from Agents & tasks; the branch, commits and folder are kept. Tasks whose chat was deleted earlier show **Chat deleted**, with a **Delete task** button at the top of the task, and can be deleted without ending them first.
 - 🗂️ **Task chats behave like other chats in the sidebar.** A chat made by New task now gets its chat file straight away (older ones are filled in when the Agents dashboard loads), so it shows its time and ⋯ menu instead of a bare row. Deleting a chat that is open now also closes it, so its row goes away.
 - 🤖 **New tasks start with your default model.** The Model picker in the New task form now starts on the default model, like a new chat, instead of "Current model".
 - 📊 **Chat stats no longer cover the messages.** The panel overlapped the chat when the app's text size or the browser font was larger than default. It now docks beside the chat only when there is room for it at the current text size, and otherwise opens as a floating panel.

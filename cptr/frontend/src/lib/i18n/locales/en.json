@@ -1428,6 +1428,7 @@
 	"coordination.status.completed": "Completed",
 	"coordination.status.failed": "Failed",
 	"coordination.status.chat_deleted": "Chat deleted",
+	"coordination.chatGoneMessage": "This task's chat was deleted, so no agent can work on it. Delete the task to remove it from this list. Its branch and commits are kept, and you choose whether to keep its folder.",
 	"coordination.status.ended": "Ended",
 	"coordination.end": "End task",
 	"coordination.endHint": "Stop the agent and close this task. The branch, worktree and chat are kept.",

@@ -670,9 +670,23 @@
 							{/if}
 						</div>
 
+						{#if task.chat_missing}
+							<!-- Its chat was deleted: nothing can run it, so offer removal up front. -->
+							<div class="chat-gone">
+								<p>{$t('coordination.chatGoneMessage')}</p>
+								<button
+									class="btn-danger"
+									disabled={busy === `delete:${task.id}`}
+									onclick={() => deleteTask(task)}
+								>
+									<Icon name="trash" size={13} />{$t('coordination.deleteTask')}
+								</button>
+							</div>
+						{/if}
+
 						<!-- Actions -->
 						<div class="flex flex-wrap gap-1.5">
-							{#if task.chat_id}
+							{#if task.chat_id && !task.chat_missing}
 								<button class="btn-secondary" onclick={() => openChatTab(task.chat_id!)}>
 									<Icon name="chat-bubble" size={13} />{$t('coordination.openChat')}
 								</button>
@@ -687,7 +701,7 @@
 										: $t('coordination.viewDiff')}
 								</button>
 							{/if}
-							{#if ['running', 'queued', 'blocked', 'reviewing'].includes(task.status)}
+							{#if ['running', 'queued', 'blocked', 'reviewing'].includes(task.status) && !task.chat_missing}
 								<button
 									class="btn-secondary"
 									disabled={busy === `pause:${task.id}`}
@@ -706,7 +720,7 @@
 									<Icon name="xmark" size={13} />{$t('coordination.end')}
 								</button>
 							{/if}
-							{#if task.status === 'paused' || task.status === 'failed'}
+							{#if (task.status === 'paused' || task.status === 'failed') && !task.chat_missing}
 								<button
 									class="btn-secondary"
 									disabled={busy === `resume:${task.id}`}
@@ -1107,7 +1121,7 @@
 								>
 							</section>
 						{/if}
-						{#if ['completed', 'failed', 'ended'].includes(task.status) || task.chat_missing}
+						{#if ['completed', 'failed', 'ended'].includes(task.status) && !task.chat_missing}
 							<section class="border-t border-gray-100 pt-3 dark:border-white/6">
 								<button
 									class="link text-xs text-red-600 dark:text-red-400"
@@ -1341,6 +1355,7 @@
 	}
 	.btn-primary,
 	.btn-secondary,
+	.btn-danger,
 	.icon-btn {
 		display: inline-flex;
 		align-items: center;
@@ -1372,8 +1387,36 @@
 		padding: 0.3125rem;
 		color: rgb(107 114 128);
 	}
+	.btn-danger {
+		padding: 0.3125rem 0.625rem;
+		background: rgb(220 38 38);
+		color: white;
+	}
+	.chat-gone {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem 0.75rem;
+		padding: 0.625rem 0.75rem;
+		border-radius: 0.5rem;
+		font-size: 0.75rem;
+		color: rgb(75 85 99);
+		background: rgb(249 250 251);
+		border: 1px solid rgb(229 231 235);
+	}
+	:global(.dark) .chat-gone {
+		color: rgb(209 213 219);
+		background: rgb(255 255 255 / 0.04);
+		border-color: rgb(255 255 255 / 0.1);
+	}
+	.chat-gone p {
+		flex: 1 1 14rem;
+		margin: 0;
+	}
 	.btn-primary:disabled,
 	.btn-secondary:disabled,
+	.btn-danger:disabled,
 	.icon-btn:disabled {
 		opacity: 0.45;
 		cursor: default;
