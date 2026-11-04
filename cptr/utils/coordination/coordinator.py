@@ -1,0 +1,294 @@
+"""Coordinator: turns detection results into effects, and wires the triggers.
+
+``refresh(repo_key)`` scans for conflicts, applies effects (messages,
+blockers, unblocking), runs the scheduler and pushes ``coord:*`` events to
+the UI. It is triggered by events (agent turn end, registration, status or
+dependency changes) and coalesced per repository so a burst of events causes
+at most one extra scan.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any
+
+from cptr.models.coordination import CONFLICT_LEVELS, CoordConflict, CoordTask, CoordTaskDep
+from cptr.utils.config import now_ms
+from cptr.utils.coordination import changes as ch
+from cptr.utils.coordination import conflicts, messages, scheduler
+
+logger = logging.getLogger(__name__)
+
+_scan_locks: dict[str, asyncio.Lock] = {}
+_inflight: dict[str, asyncio.Task] = {}
+_dirty: set[str] = set()
+_BLOCKABLE = {"queued", "running", "paused", "reviewing", "integration_ready"}
+_NOTIFY_CHANGES = {"new", "escalated", "reopened"}
+
+
+def _reset_for_tests() -> None:
+    _scan_locks.clear()
+    _inflight.clear()
+    _dirty.clear()
+
+
+async def _emit(user_ids: set[str], payload: dict) -> None:
+    from cptr.socket.main import emit_to_user
+
+    for user_id in user_ids:
+        try:
+            await emit_to_user(user_id, payload)
+        except Exception:  # noqa: BLE001 - UI push must never break coordination
+            logger.debug("[coord] emit failed", exc_info=True)
+
+
+def _summary(row: CoordConflict, titles: dict[str, str], other_id: str | None) -> str:
+    ev = row.evidence or {}
+    files = ev.get("files") or []
+    other = titles.get(other_id or "", other_id) if other_id else "the base branch"
+    detail = {
+        "file_overlap": "both tasks modify the same files",
+        "shared_config": "both tasks modify shared configuration",
+        "lockfile": "both tasks modify a dependency lockfile",
+        "migration_heads": "both tasks add database migrations in the same directory",
+        "interface": "a public interface changed and the other task uses it",
+        "dependency_version": "the tasks require different versions of a dependency",
+        "merge_conflict": "the branches do not merge cleanly",
+        "base_divergence": "the branch no longer merges cleanly into its base",
+        "dependency_failed": "a task this one depends on has failed",
+    }.get(row.kind, row.kind.replace("_", " "))
+    text = f"{row.level.upper()} conflict with {other}: {detail}"
+    if files:
+        text += f" ({', '.join(files[:6])}{'…' if len(files) > 6 else ''})"
+    if row.kind == "interface":
+        text += f"; symbols: {', '.join(sorted(ev.get('symbols', {}))[:6])}"
+    return text + "."
+
+
+def _blocked_task(row: CoordConflict, deps: set[tuple[str, str]]) -> str | None:
+    """Which task to hold for a blocking conflict: the one that depends on the other."""
+    if row.kind == "dependency_failed" or row.task_b is None:
+        return row.task_a
+    if (row.task_a, row.task_b) in deps:
+        return row.task_a
+    if (row.task_b, row.task_a) in deps:
+        return row.task_b
+    return None  # cycles and unrelated pairs: surfaced, nobody is paused
+
+
+async def _block(task_id: str, row: CoordConflict) -> dict | None:
+    task = await CoordTask.get_by_id(task_id)
+    if not task or task.status not in _BLOCKABLE | {"blocked"}:
+        return None
+    blockers = list(task.blockers or [])
+    if any(b.get("conflict_id") == row.id for b in blockers):
+        return None
+    blockers.append(
+        {"kind": "conflict", "conflict_id": row.id, "detail": row.kind, "since": now_ms()}
+    )
+    fields: dict[str, Any] = {"blockers": blockers}
+    if task.status != "blocked":
+        fields["status"] = "blocked"
+        fields["meta"] = {**(task.meta or {}), "status_before_block": task.status}
+    await CoordTask.update_fields(task.id, **fields)
+    return (await CoordTask.get_by_id(task.id)).to_dict()
+
+
+async def _unblock(row: CoordConflict, active_chats: set[str]) -> list[dict]:
+    changed = []
+    for task_id in {row.task_a, row.task_b} - {None}:
+        task = await CoordTask.get_by_id(task_id)
+        if not task:
+            continue
+        blockers = [b for b in (task.blockers or []) if b.get("conflict_id") != row.id]
+        if blockers == (task.blockers or []):
+            continue
+        fields: dict[str, Any] = {"blockers": blockers}
+        if task.status == "blocked" and not blockers:
+            meta = dict(task.meta or {})
+            previous = meta.pop("status_before_block", "paused")
+            if previous == "running" and task.chat_id not in active_chats:
+                previous = "paused"
+            fields["status"] = previous if previous in _BLOCKABLE else "paused"
+            fields["meta"] = meta
+        await CoordTask.update_fields(task.id, **fields)
+        changed.append((await CoordTask.get_by_id(task.id)).to_dict())
+    return changed
+
+
+async def apply_effects(
+    repo_key: str,
+    upserted: list[tuple[CoordConflict, str]],
+    resolved: list[CoordConflict],
+) -> dict[str, list]:
+    from cptr.utils.chat_task import get_active_chat_ids
+
+    tasks = {t.id: t for t in await CoordTask.query(repo_key=repo_key)}
+    titles = {tid: f'"{t.title}" ({tid})' for tid, t in tasks.items()}
+    deps = set(await CoordTaskDep.all_for_repo(repo_key))
+    active = get_active_chat_ids()
+    changed_tasks: dict[str, dict] = {}
+    notified: list[dict] = []
+
+    for row, change in upserted:
+        if change in _NOTIFY_CHANGES and CONFLICT_LEVELS.index(row.level) >= 1:
+            for recipient in {row.task_a, row.task_b} - {None}:
+                other = row.task_b if recipient == row.task_a else row.task_a
+                kind = "incompatibility" if row.level in {"confirmed", "blocking"} else "conflict"
+                if row.kind == "file_overlap":
+                    kind = "file_overlap"
+                await messages.post(
+                    from_task=None,
+                    repo_key=repo_key,
+                    to_task=recipient,
+                    kind=kind,
+                    body=_summary(row, titles, other),
+                    files=(row.evidence or {}).get("files"),
+                    payload={"conflict_id": row.id, "level": row.level},
+                )
+            notified.append(row.to_dict())
+        if row.level == "blocking" and row.status == "open":
+            target = _blocked_task(row, deps)
+            if target:
+                updated = await _block(target, row)
+                if updated:
+                    changed_tasks[target] = updated
+        elif row.level != "blocking" or row.status == "acknowledged":
+            # De-escalated below blocking, or the user acknowledged it and chose to proceed.
+            for t in await _unblock(row, active):
+                changed_tasks[t["id"]] = t
+
+    for row in resolved:
+        for t in await _unblock(row, active):
+            changed_tasks[t["id"]] = t
+
+    # Persist what each task touches (survives restarts; used for message relevance).
+    for task_id, task in tasks.items():
+        cs = ch._cache.get(task_id)
+        if cs is None:
+            continue
+        observed = sorted(cs.files)
+        if (task.meta or {}).get("observed_files") != observed:
+            current = await CoordTask.get_by_id(task_id)
+            await CoordTask.update_fields(
+                task_id, meta={**(current.meta or {}), "observed_files": observed}
+            )
+
+    users = {t.user_id for t in tasks.values()}
+    for row_dict in notified:
+        await _emit(users, {"type": "coord:conflict", "conflict": row_dict})
+    for row in resolved:
+        await _emit(users, {"type": "coord:conflict", "conflict": row.to_dict()})
+    for task_dict in changed_tasks.values():
+        await _emit(users, {"type": "coord:task", "task": task_dict})
+    return {"changed_tasks": list(changed_tasks), "notified": [r["id"] for r in notified]}
+
+
+async def _identity_for_repo(repo_key: str):
+    tasks = await CoordTask.query(repo_key=repo_key)
+    if not tasks:
+        return None
+    try:
+        from cptr.utils.identity import identity_for_user_id
+
+        return await identity_for_user_id(tasks[0].user_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def refresh(repo_key: str, identity=None) -> dict:
+    """Scan, apply effects and schedule one repository (serialised per repo)."""
+    lock = _scan_locks.setdefault(repo_key, asyncio.Lock())
+    async with lock:
+        identity = identity or await _identity_for_repo(repo_key)
+        upserted, resolved = await conflicts.scan(repo_key, identity)
+        effects = await apply_effects(repo_key, upserted, resolved)
+    started = await scheduler.schedule(repo_key)
+    if started:
+        tasks = await CoordTask.query(repo_key=repo_key)
+        await _emit(
+            {t.user_id for t in tasks},
+            {"type": "coord:task", "task": None, "repo_key": repo_key, "started": started},
+        )
+    return {
+        **effects,
+        "started": started,
+        "open_conflicts": len([r for r, _ in upserted if r.status == "open"]),
+    }
+
+
+def request_refresh(repo_key: str) -> None:
+    """Fire-and-forget refresh, coalesced: a burst causes at most one extra scan."""
+    task = _inflight.get(repo_key)
+    if task and not task.done():
+        _dirty.add(repo_key)
+        return
+
+    async def run():
+        try:
+            while True:
+                _dirty.discard(repo_key)
+                try:
+                    await refresh(repo_key)
+                except Exception:  # noqa: BLE001
+                    logger.exception("[coord] refresh failed for %s", repo_key)
+                if repo_key not in _dirty:
+                    return
+        finally:
+            _inflight.pop(repo_key, None)
+
+    _inflight[repo_key] = asyncio.create_task(run())
+
+
+async def wait_idle() -> None:
+    """Test helper: wait for in-flight refreshes."""
+    while _inflight:
+        await asyncio.gather(*list(_inflight.values()), return_exceptions=True)
+
+
+# ── Agent turn hooks (called from chat_task) ────────────────
+
+
+async def on_turn_start(chat_id: str, chat_meta: dict | None) -> str:
+    """Mark the task running and return the coordinator block to append to the prompt."""
+    task_id = (chat_meta or {}).get("coord_task_id")
+    if not task_id:
+        return ""
+    task = await CoordTask.get_by_id(task_id)
+    if not task or task.chat_id != chat_id:
+        return ""
+    if task.status in {"queued", "paused"}:
+        await CoordTask.update_fields(task.id, expect_status=task.status, status="running")
+        await _emit(
+            {task.user_id},
+            {"type": "coord:task", "task": (await CoordTask.get_by_id(task.id)).to_dict()},
+        )
+    block = await messages.take_delivery(task.id)
+    if task.status == "blocked":
+        reasons = "; ".join(b.get("detail", b.get("kind", "")) for b in task.blockers or [])
+        block += (
+            "\n\n[Coordinator] This task is currently BLOCKED"
+            + (f" ({reasons})" if reasons else "")
+            + ". Avoid changes that deepen the conflict; resolve it or ask the user."
+        )
+    return block
+
+
+class CoordinationEventSink:
+    """Event-bus sink: refresh the task's repository when its agent turn ends."""
+
+    async def handle_event(self, event) -> None:
+        if event.event not in {"chat.finished", "chat.failed"}:
+            return
+        chat_id = (event.subject or {}).get("id")
+        if not chat_id:
+            return
+        task = await CoordTask.get_by_chat(str(chat_id))
+        if not task:
+            return
+        if event.event == "chat.failed":
+            await CoordTask.update_fields(
+                task.id, meta={**(task.meta or {}), "last_turn": {"failed": True, "at": now_ms()}}
+            )
+        request_refresh(task.repo_key)

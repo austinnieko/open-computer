@@ -85,6 +85,8 @@ async def register_task(
     depends_on: list[str] | None = None,
     files: list[str] | None = None,
     isolate: bool = True,
+    start_prompt: str | None = None,
+    model_id: str | None = None,
     identity: ExecutionIdentity | None = None,
 ) -> dict[str, Any]:
     """Register a coding task, reusing an existing one when it is the same work.
@@ -131,6 +133,7 @@ async def register_task(
             worktree_path = wt.default_worktree_path(
                 repo.main_root, f"{wt.slugify(title, max_len=32)}-{task_id[5:11]}"
             )
+            base_branch = await _base_branch(repo.main_root, base_ref, identity)
             base_ref = base_ref or "HEAD"
             resolved_base = await wt.resolve_sha(repo.main_root, base_ref, identity)
             if resolved_base is None:
@@ -138,8 +141,16 @@ async def register_task(
             claims += [("branch", f"branch:{branch}"), ("worktree", f"worktree:{worktree_path}")]
         else:
             branch = None
+            base_branch = None
         if chat_id:
             claims.append(("chat", f"chat:{chat_id}"))
+        meta: dict[str, Any] = {"isolated": isolate}
+        if base_branch:
+            meta["base_branch"] = base_branch
+        if start_prompt:
+            if not chat_id:
+                raise CoordinationError("A start prompt needs a chat to run in")
+            meta["start"] = {"prompt": start_prompt, "model_id": model_id}
 
         try:
             task = await CoordTask.create_with_claims(
@@ -160,7 +171,7 @@ async def register_task(
                 worktree_path=worktree_path,
                 files=sorted(set(files or [])),
                 blockers=[],
-                meta=_milestone({"isolated": isolate}, "registered"),
+                meta=_milestone(meta, "registered"),
             )
         except ClaimConflict as exc:
             raise CoordinationError(str(exc)) from exc
@@ -173,6 +184,21 @@ async def register_task(
             await bind_chat(task.id, chat_id)
         refreshed = await CoordTask.get_by_id(task.id)
         return {"task": refreshed.to_dict(), "reused": False, "worktree": worktree}
+
+
+async def _base_branch(
+    repo_root: str, base_ref: str | None, identity: ExecutionIdentity | None
+) -> str | None:
+    """The local branch a task integrates into: ``base_ref`` if it names one,
+    else the branch checked out in the main checkout."""
+    from cptr.utils.git import _run
+
+    if base_ref and base_ref != "HEAD":
+        return base_ref if await wt.branch_exists(repo_root, base_ref, identity) else None
+    code, out, _ = await _run(
+        "symbolic-ref", "--quiet", "--short", "HEAD", cwd=repo_root, check=False, identity=identity
+    )
+    return out.strip() if code == 0 and out.strip() else None
 
 
 async def _ensure_task_worktree(

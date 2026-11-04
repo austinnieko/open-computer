@@ -1032,6 +1032,75 @@ async def update_tasks(
     return json.dumps({"tasks": next_tasks, "summary": summary}, ensure_ascii=False)
 
 
+async def coordinate(
+    action: str,
+    kind: str = "",
+    message: str = "",
+    to_task: str = "",
+    files: list[str] | None = None,
+    depends_on: str = "",
+    *,
+    __context__: dict,
+) -> str:
+    """Coordinate with other agents working in the same repository (multi-agent tasks only).
+    :param action: One of: status (your task, related tasks, open conflicts, unread messages), message (send a structured message), declare_files (record files you intend to change), depend (record that your task depends on another task id), ready (mark your task ready for review before integration).
+    :param kind: For message: interface_change, ready, depends_on, file_overlap, integration_ready, incompatibility or note.
+    :param message: For message: the text to send. Keep it short and specific.
+    :param to_task: For message: a task id. Leave empty to notify only tasks that touch the given files or are linked by a dependency.
+    :param files: For message or declare_files: repository-relative file paths.
+    :param depends_on: For depend: the task id your task depends on.
+    """
+    from cptr.models import Chat
+    from cptr.models.coordination import ACTIVE_STATUSES, CoordConflict, CoordTask
+    from cptr.utils.coordination import coordinator, messages, registry, scheduler
+
+    chat = await Chat.get_by_id(__context__.get("chat_id") or "")
+    task_id = (chat.meta or {}).get("coord_task_id") if chat else None
+    task = await CoordTask.get_by_id(task_id) if task_id else None
+    if not task or task.chat_id != chat.id:
+        return json.dumps({"error": "This chat is not a coordinated task"})
+    try:
+        if action == "status":
+            peers = await CoordTask.query(repo_key=task.repo_key, statuses=ACTIVE_STATUSES)
+            open_conflicts = await CoordConflict.query(
+                task.repo_key, statuses={"open", "acknowledged"}, task_id=task.id
+            )
+            pending = await messages.take_delivery(task.id)
+            return json.dumps({
+                "task": {k: v for k, v in task.to_dict().items()
+                         if k in {"id", "title", "status", "branch", "worktree_path", "blockers"}},
+                "other_tasks": [
+                    {"id": p.id, "title": p.title, "status": p.status, "branch": p.branch}
+                    for p in peers if p.id != task.id
+                ],
+                "conflicts": [c.to_dict() for c in open_conflicts],
+                "messages": pending.strip() or None,
+            }, ensure_ascii=False)
+        if action == "message":
+            rows = await messages.post(
+                from_task=task.id, kind=kind or "note", body=message,
+                to_task=to_task or None, files=files or [],
+            )
+            return json.dumps({"delivered_to": [r["to_task"] for r in rows]})
+        if action == "declare_files":
+            declared = sorted(set(task.files or []) | set(files or []))
+            await CoordTask.update_fields(task.id, files=declared)
+            coordinator.request_refresh(task.repo_key)
+            return json.dumps({"files": declared})
+        if action == "depend":
+            result = await scheduler.add_dependency(task.id, depends_on)
+            coordinator.request_refresh(task.repo_key)
+            return json.dumps(result)
+        if action == "ready":
+            result = await registry.set_status(task.id, "reviewing", reason="agent reported ready")
+            coordinator.request_refresh(task.repo_key)
+            return json.dumps({"status": result["status"],
+                               "note": "Integration readiness is decided by the coordinator."})
+    except (registry.CoordinationError, messages.MessageError) as exc:
+        return json.dumps({"error": str(exc)})
+    return json.dumps({"error": f"Unknown action {action!r}"})
+
+
 async def clear_active_tasks(
     chat_id: str, user_id: str | None = None, message_id: str | None = None
 ) -> None:
@@ -2838,7 +2907,12 @@ SUBAGENT_TOOLS: dict[str, dict] = {
 }
 
 # Combined lookup for execution and approval (always available regardless of config)
-ALL_TOOLS: dict[str, dict] = {**TOOLS, **BROWSER_TOOLS, **SUBAGENT_TOOLS}
+# Only offered to chats bound to a coordinated multi-agent task.
+COORDINATION_TOOLS: dict[str, dict] = {
+    "coordinate": {"fn": coordinate, "approval": "allow"},
+}
+
+ALL_TOOLS: dict[str, dict] = {**TOOLS, **BROWSER_TOOLS, **SUBAGENT_TOOLS, **COORDINATION_TOOLS}
 
 
 async def resolve_builtin_tool_approval(name: str) -> ToolApprovalPolicy:
@@ -2888,6 +2962,7 @@ BUILTIN_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
     "chats": ("search_chats",),
     "skills": ("view_skill", "manage_skill"),
     "tasks": ("update_tasks",),
+    "coordination": ("coordinate",),
     "automations": (
         "list_automations",
         "create_automation",
@@ -3227,13 +3302,18 @@ def _without_background_param(schema: dict) -> dict:
     return schema
 
 
-async def get_tool_list(builtin_tools: dict | None = None, workspace: str = "") -> list[dict]:
+async def get_tool_list(
+    builtin_tools: dict | None = None, workspace: str = "", *, coordinated: bool = False
+) -> list[dict]:
     """Return tool schemas for the LLM.
 
     Automatically includes browser tools when browser.enabled is true,
-    and external tool server tools when configured.
+    and external tool server tools when configured. ``coordinated`` adds the
+    multi-agent ``coordinate`` tool.
     """
     tools = dict(TOOLS)
+    if coordinated:
+        tools.update(COORDINATION_TOOLS)
     background_subagents_enabled = False
     try:
         from cptr.models import Config

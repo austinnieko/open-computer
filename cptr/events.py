@@ -210,7 +210,16 @@ class TimerEventSink:
         await cancel_timers_for_event(event)
 
 
-EVENT_SINKS = [TimerEventSink(), NotificationEventSink()]
+class CoordinationSink:
+    async def handle_event(self, event: Event) -> None:
+        if event.event not in {EVENTS.CHAT_FINISHED.name, EVENTS.CHAT_FAILED.name}:
+            return
+        from cptr.utils.coordination.coordinator import CoordinationEventSink
+
+        await CoordinationEventSink().handle_event(event)
+
+
+EVENT_SINKS = [TimerEventSink(), NotificationEventSink(), CoordinationSink()]
 
 
 async def publish_event(

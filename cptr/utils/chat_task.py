@@ -1771,6 +1771,13 @@ async def run_chat_task(
             files=current_user_files,
         )
         _append_prompt_suffix(messages, agent_attachments.prompt_suffix)
+        if chat_obj and (chat_obj.meta or {}).get("coord_task_id"):
+            from cptr.utils.coordination.coordinator import on_turn_start
+
+            try:
+                _append_prompt_suffix(messages, await on_turn_start(chat_id, chat_obj.meta))
+            except Exception:
+                logger.warning("[task %s] coordinator turn hook failed", message_id[:8], exc_info=True)
         if regeneration_prompt:
             messages.append({"role": "user", "content": regeneration_prompt})
         if chat_params.get("plan_mode", False):
@@ -2091,7 +2098,12 @@ async def run_chat_task(
             system += f"\n\n[CONVERSATION SUMMARY]\n{loaded_summary}"
         if regeneration_prompt:
             messages.append({"role": "user", "content": regeneration_prompt})
-        tools = await get_tool_list(builtin_tools=builtin_tools, workspace=workspace)
+        coord_chat = await Chat.get_by_id(chat_id)
+        tools = await get_tool_list(
+            builtin_tools=builtin_tools,
+            workspace=workspace,
+            coordinated=bool(coord_chat and (coord_chat.meta or {}).get("coord_task_id")),
+        )
         if not skill_authoring_allowed:
             tools = [t for t in tools if t["name"] != "manage_skill"]
 

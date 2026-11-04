@@ -41,6 +41,7 @@ TASK_STATUSES = (
     "completed",
     "failed",
 )
+CONFLICT_LEVELS = ("info", "potential", "confirmed", "blocking")
 TERMINAL_STATUSES = frozenset({"completed", "failed"})
 ACTIVE_STATUSES = frozenset(set(TASK_STATUSES) - TERMINAL_STATUSES)
 
@@ -262,6 +263,17 @@ class CoordTaskDep(Base):
                 await db.rollback()  # already present
 
     @staticmethod
+    async def remove(task_id: str, depends_on_id: str) -> bool:
+        async with await get_db() as db:
+            result = await db.execute(
+                delete(CoordTaskDep).where(
+                    CoordTaskDep.task_id == task_id, CoordTaskDep.depends_on_id == depends_on_id
+                )
+            )
+            await db.commit()
+            return result.rowcount > 0
+
+    @staticmethod
     async def all_for_repo(repo_key: str) -> list[tuple[str, str]]:
         async with await get_db() as db:
             result = await db.execute(
@@ -348,9 +360,125 @@ class CoordConflict(Base):
         Index("ix_coord_conflicts_repo_status", "repo_key", "status"),
     )
 
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "repo_key": self.repo_key,
+            "task_a": self.task_a,
+            "task_b": self.task_b,
+            "level": self.level,
+            "kind": self.kind,
+            "evidence": self.evidence or {},
+            "status": self.status,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @staticmethod
+    async def query(
+        repo_key: str, *, statuses: set[str] | None = None, task_id: str | None = None
+    ) -> list[CoordConflict]:
+        async with await get_db() as db:
+            stmt = select(CoordConflict).where(CoordConflict.repo_key == repo_key)
+            if statuses:
+                stmt = stmt.where(CoordConflict.status.in_(sorted(statuses)))
+            if task_id:
+                stmt = stmt.where(
+                    (CoordConflict.task_a == task_id) | (CoordConflict.task_b == task_id)
+                )
+            result = await db.execute(stmt.order_by(CoordConflict.created_at))
+            return list(result.scalars().all())
+
+    @staticmethod
+    async def upsert(
+        *,
+        repo_key: str,
+        task_a: str,
+        task_b: str | None,
+        level: str,
+        kind: str,
+        evidence: dict,
+        fingerprint: str,
+    ) -> tuple[CoordConflict, str]:
+        """Insert or refresh a conflict. Returns ``(row, change)``.
+
+        ``change`` is ``"new"``, ``"escalated"``, ``"reopened"``, ``"updated"``
+        or ``"unchanged"`` so callers only notify on meaningful changes.
+        """
+        now = now_ms()
+        async with await get_db() as db:
+            result = await db.execute(
+                select(CoordConflict).where(CoordConflict.fingerprint == fingerprint)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = CoordConflict(
+                    repo_key=repo_key,
+                    task_a=task_a,
+                    task_b=task_b,
+                    level=level,
+                    kind=kind,
+                    evidence=evidence,
+                    status="open",
+                    fingerprint=fingerprint,
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(row)
+                change = "new"
+            else:
+                escalated = CONFLICT_LEVELS.index(level) > CONFLICT_LEVELS.index(row.level)
+                if row.status == "resolved":
+                    change = "reopened"
+                    row.status = "open"
+                elif escalated:
+                    change = "escalated"
+                    row.status = "open"  # an acknowledged conflict that got worse needs a look
+                elif row.level != level or row.evidence != evidence:
+                    change = "updated"
+                else:
+                    change = "unchanged"
+                if change != "unchanged":
+                    row.level, row.evidence, row.updated_at = level, evidence, now
+            try:
+                await db.commit()
+            except IntegrityError:  # raced with another scan inserting the same fingerprint
+                await db.rollback()
+                return await CoordConflict.upsert(
+                    repo_key=repo_key,
+                    task_a=task_a,
+                    task_b=task_b,
+                    level=level,
+                    kind=kind,
+                    evidence=evidence,
+                    fingerprint=fingerprint,
+                )
+            return row, change
+
+    @staticmethod
+    async def query_by_id(conflict_id: str) -> list[CoordConflict]:
+        async with await get_db() as db:
+            result = await db.execute(select(CoordConflict).where(CoordConflict.id == conflict_id))
+            return list(result.scalars().all())
+
+    @staticmethod
+    async def set_status(conflict_id: str, status: str) -> bool:
+        async with await get_db() as db:
+            result = await db.execute(
+                update(CoordConflict)
+                .where(CoordConflict.id == conflict_id)
+                .values(status=status, updated_at=now_ms())
+            )
+            await db.commit()
+            return result.rowcount > 0
+
 
 class CoordMessage(Base):
-    """A structured coordination message between tasks. Used from Phase 2."""
+    """A structured coordination message to one task.
+
+    Messages are fanned out to concrete recipients when posted, so
+    ``to_task`` is set on every row and delivery is tracked per recipient.
+    """
 
     __tablename__ = "coord_messages"
 
@@ -365,3 +493,64 @@ class CoordMessage(Base):
     created_at = Column(BigInteger, nullable=False)
 
     __table_args__ = (Index("ix_coord_messages_to", "to_task", "delivered_at"),)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "from_task": self.from_task,
+            "to_task": self.to_task,
+            "kind": self.kind,
+            "body": self.body,
+            "payload": self.payload or {},
+            "delivered_at": self.delivered_at,
+            "created_at": self.created_at,
+        }
+
+    @staticmethod
+    async def create(**fields) -> CoordMessage:
+        row = CoordMessage(created_at=now_ms(), **fields)
+        async with await get_db() as db:
+            db.add(row)
+            await db.commit()
+        return row
+
+    @staticmethod
+    async def pending_for(task_id: str) -> list[CoordMessage]:
+        async with await get_db() as db:
+            result = await db.execute(
+                select(CoordMessage)
+                .where(CoordMessage.to_task == task_id, CoordMessage.delivered_at.is_(None))
+                .order_by(CoordMessage.created_at)
+            )
+            return list(result.scalars().all())
+
+    @staticmethod
+    async def mark_delivered(message_ids: list[str]) -> set[str]:
+        """Mark messages delivered and return the ids this call claimed.
+
+        Only undelivered rows change, so two concurrent deliveries can never
+        both hand the same message to an agent.
+        """
+        if not message_ids:
+            return set()
+        async with await get_db() as db:
+            result = await db.execute(
+                update(CoordMessage)
+                .where(CoordMessage.id.in_(message_ids), CoordMessage.delivered_at.is_(None))
+                .values(delivered_at=now_ms())
+                .returning(CoordMessage.id)
+            )
+            claimed = {row[0] for row in result.all()}
+            await db.commit()
+            return claimed
+
+    @staticmethod
+    async def for_repo(repo_key: str, *, task_id: str | None = None, limit: int = 200):
+        async with await get_db() as db:
+            stmt = select(CoordMessage).where(CoordMessage.repo_key == repo_key)
+            if task_id:
+                stmt = stmt.where(
+                    (CoordMessage.to_task == task_id) | (CoordMessage.from_task == task_id)
+                )
+            result = await db.execute(stmt.order_by(CoordMessage.created_at.desc()).limit(limit))
+            return list(result.scalars().all())

@@ -6,9 +6,15 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from cptr.models.chats import Chat
-from cptr.models.coordination import CoordClaim, CoordTask, CoordTaskDep
+from cptr.models.coordination import (
+    CoordClaim,
+    CoordConflict,
+    CoordMessage,
+    CoordTask,
+    CoordTaskDep,
+)
 from cptr.routers.git import _root_identity
-from cptr.utils.coordination import registry
+from cptr.utils.coordination import coordinator, messages, registry, scheduler
 from cptr.utils.coordination import worktrees as wt
 from cptr.utils.identity import ExecutionIdentity
 from cptr.socket.main import emit_to_user
@@ -49,6 +55,8 @@ class RegisterTaskRequest(BaseModel):
     depends_on: list[str] = []
     files: list[str] = []
     isolate: bool = True
+    start_prompt: str | None = None
+    model_id: str | None = None
 
 
 class BindChatRequest(BaseModel):
@@ -63,6 +71,20 @@ class StatusRequest(BaseModel):
 
 class RemoveWorktreeRequest(BaseModel):
     confirm: bool = False
+
+
+class DependencyRequest(BaseModel):
+    depends_on: str
+
+
+class MessageRequest(BaseModel):
+    kind: str = "note"
+    body: str = Field(min_length=1, max_length=2000)
+    files: list[str] = []
+
+
+class ConflictStatusRequest(BaseModel):
+    status: str  # acknowledged | resolved | open
 
 
 @router.get("/tasks")
@@ -116,11 +138,14 @@ async def register(request: Request, body: RegisterTaskRequest):
             depends_on=body.depends_on,
             files=body.files,
             isolate=body.isolate,
+            start_prompt=body.start_prompt,
+            model_id=body.model_id,
             identity=identity,
         )
     except (registry.CoordinationError, wt.WorktreeError) as exc:
         raise HTTPException(409, str(exc)) from exc
     await _emit(user_id, result["task"])
+    coordinator.request_refresh(result["task"]["repo_key"])
     return result
 
 
@@ -148,6 +173,7 @@ async def set_status(request: Request, task_id: str, body: StatusRequest):
     except registry.CoordinationError as exc:
         raise HTTPException(409, str(exc)) from exc
     await _emit(task.user_id, result)
+    coordinator.request_refresh(task.repo_key)
     return result
 
 
@@ -171,3 +197,96 @@ async def remove_worktree(request: Request, task_id: str, body: RemoveWorktreeRe
         raise HTTPException(409, str(exc)) from exc
     await CoordClaim.release(task.id, kinds={"worktree"})
     return {"ok": True, "branch_kept": task.branch}
+
+
+async def _repo_key(request: Request, root: str) -> str:
+    root, identity = await _identity(request, root)
+    try:
+        return (await wt.repo_identity(root, identity)).key
+    except wt.WorktreeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+async def _owned_repo(request: Request, repo_key: str) -> None:
+    user_id = _user_id(request)
+    if not await CoordTask.query(user_id=user_id, repo_key=repo_key):
+        raise HTTPException(404, "no tasks for this repository")
+
+
+@router.post("/tasks/{task_id}/dependencies")
+async def add_dependency(request: Request, task_id: str, body: DependencyRequest):
+    task = await _own_task(request, task_id)
+    await _own_task(request, body.depends_on)
+    try:
+        result = await scheduler.add_dependency(task.id, body.depends_on)
+    except registry.CoordinationError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    coordinator.request_refresh(task.repo_key)
+    return result
+
+
+@router.delete("/tasks/{task_id}/dependencies/{depends_on}")
+async def remove_dependency(request: Request, task_id: str, depends_on: str):
+    task = await _own_task(request, task_id)
+    removed = await scheduler.remove_dependency(task.id, depends_on)
+    coordinator.request_refresh(task.repo_key)
+    return {"removed": removed}
+
+
+@router.get("/conflicts")
+async def list_conflicts(request: Request, root: str, include_resolved: bool = False):
+    repo_key = await _repo_key(request, root)
+    await _owned_repo(request, repo_key)
+    statuses = None if include_resolved else {"open", "acknowledged"}
+    return {
+        "conflicts": [c.to_dict() for c in await CoordConflict.query(repo_key, statuses=statuses)]
+    }
+
+
+@router.post("/conflicts/{conflict_id}/status")
+async def set_conflict_status(request: Request, conflict_id: str, body: ConflictStatusRequest):
+    if body.status not in {"acknowledged", "resolved", "open"}:
+        raise HTTPException(400, "status must be acknowledged, resolved or open")
+    rows = [r for r in await CoordConflict.query_by_id(conflict_id)]
+    if not rows:
+        raise HTTPException(404, "conflict not found")
+    await _owned_repo(request, rows[0].repo_key)
+    await CoordConflict.set_status(conflict_id, body.status)
+    # Acknowledging a blocking conflict releases the task it held; a user-resolved
+    # conflict reopens on the next scan if the evidence is still there.
+    coordinator.request_refresh(rows[0].repo_key)
+    return {"ok": True}
+
+
+@router.get("/messages")
+async def list_messages(request: Request, root: str, task_id: str | None = None):
+    repo_key = await _repo_key(request, root)
+    await _owned_repo(request, repo_key)
+    rows = await CoordMessage.for_repo(repo_key, task_id=task_id)
+    return {"messages": [m.to_dict() for m in rows]}
+
+
+@router.post("/tasks/{task_id}/messages")
+async def send_message(request: Request, task_id: str, body: MessageRequest):
+    """A user note to one task's agent, delivered at the start of its next turn."""
+    task = await _own_task(request, task_id)
+    try:
+        rows = await messages.post(
+            from_task=None,
+            repo_key=task.repo_key,
+            to_task=task.id,
+            kind=body.kind,
+            body=body.body,
+            files=body.files,
+        )
+    except messages.MessageError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"messages": rows}
+
+
+@router.post("/scan")
+async def scan(request: Request, root: str):
+    """Run conflict detection and scheduling now (normally event-driven)."""
+    repo_key = await _repo_key(request, root)
+    await _owned_repo(request, repo_key)
+    return await coordinator.refresh(repo_key)
