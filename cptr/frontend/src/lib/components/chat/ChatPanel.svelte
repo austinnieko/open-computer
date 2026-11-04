@@ -35,7 +35,7 @@
 	} from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import { trackSubagents } from '$lib/stores/subagents.svelte';
-	import { watchChatEdits } from '$lib/stores/followEdits.svelte';
+	import { setFollowEdits, watchChatEdits } from '$lib/stores/followEdits.svelte';
 	import AgentsPanel from './AgentsPanel.svelte';
 	import { onMount, onDestroy, tick, untrack } from 'svelte';
 	import { get } from 'svelte/store';
@@ -100,6 +100,7 @@
 	let selectedModel = $state('');
 	let toolApprovalMode = $state<ToolApprovalMode>('auto');
 	let planMode = $state(false);
+	let followEditsOn = $state(false);
 	let requestParams = $state<Record<string, unknown>>({});
 	let voiceModeEnabled = $state(false);
 	let allMessages = $state<ChatMessageRow[]>([]);
@@ -140,6 +141,9 @@
 		if (!chatId) return;
 		const id = chatId;
 		return untrack(() => watchChatEdits(id));
+	});
+	$effect(() => {
+		if (chatId) setFollowEdits(chatId, followEditsOn);
 	});
 	let showStatusModal = $state(false);
 	let showSkillsModal = $state(false);
@@ -737,6 +741,7 @@
 		else if (models.length) selectedModel = models[0].id;
 		toolApprovalMode = get(defaultToolApprovalMode);
 		planMode = false;
+		followEditsOn = false;
 		requestParams = {};
 		voiceModeEnabled = false;
 	}
@@ -753,6 +758,7 @@
 			toolApprovalMode = params.tool_approval_mode;
 		}
 		planMode = params.plan_mode === true;
+		followEditsOn = params.follow_edits === true;
 		if (params.request_params && typeof params.request_params === 'object') {
 			requestParams = params.request_params;
 		}
@@ -923,6 +929,7 @@
 			request_params: requestParams
 		};
 		if (voiceModeEnabled) params.voice_mode = true;
+		if (followEditsOn) params.follow_edits = true;
 		return params;
 	}
 
@@ -1822,6 +1829,7 @@
 					bind:selectedModel
 					bind:toolApprovalMode
 					bind:planMode
+					bind:followEdits={followEditsOn}
 					bind:requestParams
 					bind:voiceModeEnabled
 					{sending}
@@ -1950,6 +1958,7 @@
 					bind:selectedModel
 					bind:toolApprovalMode
 					bind:planMode
+					bind:followEdits={followEditsOn}
 					bind:requestParams
 					bind:voiceModeEnabled
 					{sending}

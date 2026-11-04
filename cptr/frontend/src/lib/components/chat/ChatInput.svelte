@@ -68,6 +68,7 @@
 		selectedModel: string;
 		toolApprovalMode?: ToolApprovalMode;
 		planMode?: boolean;
+		followEdits?: boolean;
 		requestParams?: Record<string, unknown>;
 		voiceModeEnabled?: boolean;
 		sending: boolean;
@@ -103,6 +104,7 @@
 		selectedModel = $bindable(),
 		toolApprovalMode = $bindable('auto'),
 		planMode = $bindable(false),
+		followEdits = $bindable(false),
 		requestParams = $bindable({}),
 		voiceModeEnabled = $bindable(false),
 		sending,
@@ -1638,6 +1640,7 @@
 				<PlusMenu
 					bind:toolApprovalMode
 					bind:planMode
+					bind:followEdits
 					bind:requestParams
 					onchange={onsettingschange}
 					{ontoolapprovalchange}
@@ -1672,6 +1675,31 @@
 						</svg>
 						<svg
 							class="size-3 shrink-0 hidden group-hover:block"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+						>
+							<line x1="18" y1="6" x2="6" y2="18" />
+							<line x1="6" y1="6" x2="18" y2="18" />
+						</svg>
+					</button>
+				{/if}
+				{#if followEdits}
+					<button
+						type="button"
+						title="Following edits: each file the agent edits opens beside the chat. Click to stop."
+						class="app-surface app-interactive group flex items-center gap-1 rounded-full border px-2 py-[0.3125rem] text-xs transition-colors duration-150"
+						onclick={() => {
+							followEdits = false;
+							onsettingschange?.();
+						}}
+					>
+						<span>Following edits</span>
+						<svg
+							class="size-3 shrink-0 opacity-50 group-hover:opacity-100"
 							viewBox="0 0 24 24"
 							fill="none"
 							stroke="currentColor"

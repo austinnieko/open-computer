@@ -8,62 +8,20 @@ import { get } from 'svelte/store';
 import { currentWorkspace, openFileTab, openInSplit, setActiveGroup } from '$lib/stores';
 import { socketStore } from '$lib/stores/socket.svelte';
 import { parentOf } from '$lib/stores/subagents.svelte';
+import { fileEditFromCall, type FileEdit } from '$lib/utils/fileEdits';
 
-export const FILE_EDIT_TOOLS = new Set([
-	'edit_file',
-	'multi_edit_file',
-	'write_file',
-	'create_file'
-]);
-
-const STORAGE_KEY = 'cptr.followEdits';
-
-function readPref(): boolean {
-	try {
-		return localStorage.getItem(STORAGE_KEY) === '1';
-	} catch {
-		return false;
-	}
-}
-
-let enabled = $state(readPref());
+// Per-chat setting, saved with the chat's other settings (params.follow_edits).
+const enabledChats = new Set<string>();
 const watched = new Set<string>();
-const pendingCalls = new Map<string, { name: string; args: any }>();
+const pendingCalls = new Map<string, FileEdit>();
+const followed = new Set<string>();
 let listening = false;
 let requestId = 0;
 
-export const followEdits = {
-	get enabled() {
-		return enabled;
-	},
-	set enabled(value: boolean) {
-		enabled = value;
-		try {
-			localStorage.setItem(STORAGE_KEY, value ? '1' : '0');
-		} catch {
-			/* private mode */
-		}
-	}
-};
-
-function parseArgs(raw: any): any {
-	if (typeof raw !== 'string') return raw || {};
-	try {
-		return JSON.parse(raw);
-	} catch {
-		return {};
-	}
-}
-
-/** Text to find and flash in the edited file. */
-export function editedText(name: string, args: any): string {
-	if (name === 'edit_file') return String(args.replacement ?? '');
-	if (name === 'multi_edit_file') {
-		const edits = typeof args.edits === 'string' ? parseArgs(args.edits) : args.edits;
-		const last = Array.isArray(edits) ? edits[edits.length - 1] : null;
-		return String(last?.replacement ?? '');
-	}
-	return String(args.content ?? '').slice(0, 400);
+/** Turn following on or off for one chat (and its sub-agents). */
+export function setFollowEdits(chatId: string, on: boolean) {
+	if (on) enabledChats.add(chatId);
+	else enabledChats.delete(chatId);
 }
 
 export function resolveWorkspacePath(path: string): string {
@@ -97,10 +55,24 @@ export function showEdit(path: string, text: string) {
 	setActiveGroup(chatGroupId);
 }
 
-function isWatched(chatId: string): boolean {
-	if (watched.has(chatId)) return true;
+function owningChat(chatId: string): string | null {
+	if (watched.has(chatId)) return chatId;
 	const parent = parentOf(chatId);
-	return !!parent && watched.has(parent);
+	return parent && watched.has(parent) ? parent : null;
+}
+
+function follow(owner: string, callId: string, edit: FileEdit) {
+	if (followed.has(callId)) return;
+	followed.add(callId);
+	if (!enabledChats.has(owner) || !insideWorkspace(edit.path)) return;
+	showEdit(edit.path, edit.flashText);
+}
+
+/** Only follow into the workspace; agents also write scratch files elsewhere. */
+function insideWorkspace(path: string): boolean {
+	const ws = (get(currentWorkspace)?.path || '').replace(/\/$/, '');
+	const abs = resolveWorkspacePath(path);
+	return !!ws && (abs === ws || abs.startsWith(ws + '/'));
 }
 
 function ensureListener() {
@@ -108,17 +80,31 @@ function ensureListener() {
 	listening = true;
 	socketStore.on('events:chat', (data: any) => {
 		const out = data?.output;
-		if (!out || !data.chat_id || !isWatched(data.chat_id)) return;
-		if (out.type === 'function_call' && FILE_EDIT_TOOLS.has(out.name) && out.call_id) {
-			pendingCalls.set(out.call_id, { name: out.name, args: parseArgs(out.arguments) });
+		const owner = out && data.chat_id ? owningChat(data.chat_id) : null;
+		if (!owner || !out.call_id) return;
+		if (out.type === 'function_call') {
+			const edit = fileEditFromCall(out);
+			if (!edit) return;
+			if (out.status === 'failed') {
+				pendingCalls.delete(out.call_id);
+				return;
+			}
+			// Coding agents report completion on the call itself.
+			if (edit.native && out.status === 'completed') {
+				pendingCalls.delete(out.call_id);
+				follow(owner, out.call_id, edit);
+			} else {
+				pendingCalls.set(out.call_id, edit);
+			}
 			return;
 		}
-		if (out.type === 'function_call_output' && out.call_id && pendingCalls.has(out.call_id)) {
-			const call = pendingCalls.get(out.call_id)!;
+		if (out.type === 'function_call_output' && pendingCalls.has(out.call_id)) {
+			const edit = pendingCalls.get(out.call_id)!;
 			pendingCalls.delete(out.call_id);
-			if (!enabled || out.status === 'failed' || !call.args?.path) return;
-			if (call.name === 'create_file' && call.args.artifact_type) return;
-			showEdit(String(call.args.path), editedText(call.name, call.args));
+			if (out.status === 'failed') return;
+			if (edit.native || !/^\s*(error:|exception:|traceback)/i.test(String(out.output ?? ''))) {
+				follow(owner, out.call_id, edit);
+			}
 		}
 	});
 }

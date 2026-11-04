@@ -1,59 +1,40 @@
 <script lang="ts">
 	/**
-	 * A visible diff for one agent file edit (edit_file, multi_edit_file,
-	 * write_file, create_file), instead of a collapsed tool row.
+	 * A visible diff for one file edit, from Computer's own edit tools or a
+	 * coding agent's write/edit/patch step, instead of a collapsed tool row.
 	 */
 	import Icon from '../Icon.svelte';
 	import { tooltip } from '$lib/tooltip';
 	import { fileIconName } from '$lib/utils/fileIcon';
 	import { diffStats, lineDiff, type DiffLine } from '$lib/utils/lineDiff';
-	import { editedText, followEdits, showEdit } from '$lib/stores/followEdits.svelte';
+	import { editStatus, type FileEdit } from '$lib/utils/fileEdits';
+	import { showEdit } from '$lib/stores/followEdits.svelte';
+	import { currentWorkspace } from '$lib/stores';
 
 	interface Props {
 		item: any;
+		edit: FileEdit;
 		pairedOutput?: any;
 	}
 
-	let { item, pairedOutput }: Props = $props();
+	let { item, edit, pairedOutput }: Props = $props();
 
 	const COLLAPSED_LINES = 24;
 
-	const args = $derived.by(() => {
-		let a = item.arguments;
-		if (typeof a === 'string') {
-			try {
-				a = JSON.parse(a);
-			} catch {
-				a = {};
-			}
-		}
-		return a || {};
+	const path = $derived(edit.path);
+	// Show paths inside the workspace relative to it; keep others absolute.
+	const shownPath = $derived.by(() => {
+		const ws = ($currentWorkspace?.path || '').replace(/\/$/, '');
+		return ws && path.startsWith(ws + '/') ? path.slice(ws.length + 1) : path;
 	});
-	const path = $derived(String(args.path || ''));
-	const fileName = $derived(path.split('/').pop() || path || 'file');
-	const dir = $derived(path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
+	const fileName = $derived(shownPath.split('/').pop() || shownPath || 'file');
+	const dir = $derived(
+		shownPath.includes('/') ? shownPath.slice(0, shownPath.lastIndexOf('/')) : ''
+	);
 
-	const edits = $derived.by((): { before: string; after: string }[] => {
-		if (item.name === 'edit_file') {
-			return [{ before: String(args.target ?? ''), after: String(args.replacement ?? '') }];
-		}
-		if (item.name === 'multi_edit_file') {
-			let list = args.edits;
-			if (typeof list === 'string') {
-				try {
-					list = JSON.parse(list);
-				} catch {
-					list = [];
-				}
-			}
-			return (Array.isArray(list) ? list : []).map((e: any) => ({
-				before: String(e?.target ?? ''),
-				after: String(e?.replacement ?? '')
-			}));
-		}
-		return [{ before: '', after: String(args.content ?? '') }];
-	});
-	const hunks = $derived(edits.map((e) => lineDiff(e.before, e.after)));
+	const hunks = $derived(
+		edit.patchLines ? [edit.patchLines] : edit.edits.map((e) => lineDiff(e.before, e.after))
+	);
 	const stats = $derived.by(() =>
 		hunks.reduce(
 			(acc, h) => {
@@ -66,18 +47,14 @@
 	const totalLines = $derived(hunks.reduce((n, h) => n + h.length, 0));
 
 	const output = $derived(typeof pairedOutput?.output === 'string' ? pairedOutput.output : '');
-	const isToolResultError = (text: string) => /^\s*(error:|exception:|traceback)/i.test(text);
-	const failed = $derived(
-		item.status === 'failed' || pairedOutput?.status === 'failed' || isToolResultError(output)
-	);
-	const running = $derived(!pairedOutput && item.status !== 'failed');
+	const editState = $derived(editStatus(item, pairedOutput, edit));
+	const failed = $derived(editState === 'failed');
+	const running = $derived(editState === 'running');
 	const verb = $derived.by(() => {
-		if (running)
-			return item.name === 'edit_file' || item.name === 'multi_edit_file' ? 'Editing' : 'Writing';
+		if (running) return edit.kind === 'write' ? 'Writing' : 'Editing';
 		if (failed) return 'Edit failed';
 		if (item.name === 'create_file') return 'Created';
-		if (item.name === 'write_file') return 'Wrote';
-		return 'Edited';
+		return edit.kind === 'write' ? 'Wrote' : 'Edited';
 	});
 
 	let expanded = $state(false);
@@ -96,7 +73,7 @@
 	});
 
 	function openAtEdit() {
-		if (path) showEdit(path, editedText(item.name, args));
+		if (path) showEdit(path, edit.flashText);
 	}
 </script>
 
@@ -137,20 +114,6 @@
 			{#if stats.added}<span class="text-emerald-600 dark:text-emerald-400">+{stats.added}</span
 				>{/if}
 			{#if stats.removed}<span class="text-red-600 dark:text-red-400">−{stats.removed}</span>{/if}
-			<button
-				type="button"
-				class="flex items-center gap-1 rounded-full px-1.5 py-0.5 transition-colors {followEdits.enabled
-					? 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-					: 'app-muted hover:text-gray-700 dark:hover:text-gray-300'}"
-				onclick={() => (followEdits.enabled = !followEdits.enabled)}
-				aria-pressed={followEdits.enabled}
-				use:tooltip={followEdits.enabled
-					? 'Following edits: files open in the editor as the agent changes them'
-					: 'Follow edits: open each file in the editor as the agent changes it'}
-			>
-				<Icon name="eye" size={12} />
-				<span>Follow</span>
-			</button>
 		</span>
 	</div>
 
@@ -167,7 +130,9 @@
 					{#each lines as line, i (i)}
 						{#if line.kind === 'skip'}
 							<div class="app-muted bg-gray-500/5 px-3 py-0.5 text-[10px] select-none">
-								⋯ {line.count} unchanged {line.count === 1 ? 'line' : 'lines'}
+								{line.count
+									? `⋯ ${line.count} unchanged ${line.count === 1 ? 'line' : 'lines'}`
+									: '⋯'}
 							</div>
 						{:else}
 							<div

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.26] - 2026-11-04
+
+### Changed
+
+- ⚙️ **Follow edits is now a per-chat setting.** Turn it on from the + menu in the message box, under Plan mode. Each chat remembers its own choice. While it's on, a "Following edits" label next to the + button shows it, and clicking the label turns it off. The toggle on each change card has been removed.
+- 🧑‍💻 **Coding agents' edits show as change cards too.** File writes, edits, and patches made by OpenCode, Claude Code, and other coding agents now get the same diff card as Computer's own edits, and Follow edits opens them in the editor. Paths inside the workspace are shown relative to it. Follow edits only opens files inside the workspace, so agents' scratch files elsewhere don't take over the editor.
+
+### Fixed
+
+- 💾 **Chat settings now save.** Plan mode, tool permissions, and other per-chat settings were never actually saved, because the app sent the save in a form the server rejected. They now stick when you reopen a chat.
+
 ## [0.9.25] - 2026-11-04
 
 ### Added

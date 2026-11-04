@@ -11,6 +11,7 @@
 		oncapture?: (file: File) => void;
 		toolApprovalMode?: ToolApprovalMode;
 		planMode?: boolean;
+		followEdits?: boolean;
 		requestParams?: Record<string, unknown>;
 		onchange?: () => void;
 		ontoolapprovalchange?: (mode: ToolApprovalMode) => void;
@@ -20,6 +21,7 @@
 		oncapture,
 		toolApprovalMode = $bindable('auto'),
 		planMode = $bindable(false),
+		followEdits = $bindable(false),
 		requestParams = $bindable({}),
 		onchange,
 		ontoolapprovalchange
@@ -329,6 +331,26 @@
 						value={planMode}
 						onchange={(v) => {
 							planMode = v;
+							onchange?.();
+						}}
+					/>
+				</button>
+
+				<!-- Follow edits: open each file the agent edits beside the chat -->
+				<button
+					class="flex items-center gap-2 w-full h-7 px-2 rounded-xl text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-white transition-colors duration-75"
+					title="Open each file the agent edits beside the chat and highlight the change"
+					onclick={() => {
+						followEdits = !followEdits;
+						onchange?.();
+					}}
+				>
+					<Icon name="split-view" size={14} />
+					<span class="flex-1 text-left truncate">Follow edits</span>
+					<ToggleSwitch
+						value={followEdits}
+						onchange={(v) => {
+							followEdits = v;
 							onchange?.();
 						}}
 					/>

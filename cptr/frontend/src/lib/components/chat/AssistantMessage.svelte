@@ -9,7 +9,7 @@
 	import ReasoningCollapsible from './ReasoningCollapsible.svelte';
 	import SubagentCard from './SubagentCard.svelte';
 	import FileChangeCard from './FileChangeCard.svelte';
-	import { FILE_EDIT_TOOLS } from '$lib/stores/followEdits.svelte';
+	import { fileEditFromCall } from '$lib/utils/fileEdits';
 	import ToolCallCollapsible from './ToolCallCollapsible.svelte';
 	import { currentWorkspace, openFileTab } from '$lib/stores';
 	import { ttsConfigured, ttsEnabled } from '$lib/stores/audio';
@@ -289,6 +289,7 @@
 	interface FileChangeItem {
 		type: 'file_change_item';
 		item: any;
+		edit: NonNullable<ReturnType<typeof fileEditFromCall>>;
 		output: any;
 	}
 
@@ -345,19 +346,6 @@
 		return cleaned.replace(/\n{3,}/g, '\n\n').trim();
 	}
 
-	function isArtifactCall(item: any): boolean {
-		if (item.name !== 'create_file') return false;
-		let a = item.arguments;
-		if (typeof a === 'string') {
-			try {
-				a = JSON.parse(a);
-			} catch {
-				return false;
-			}
-		}
-		return !!a?.artifact_type || !a?.path;
-	}
-
 	const displayItems = $derived.by((): DisplayItem[] => {
 		if (!output?.length) return [];
 
@@ -402,13 +390,17 @@
 				items.push({ type: 'subagent_item', item, output: outputMap.get(item.call_id) });
 			} else if (
 				item.type === 'function_call' &&
-				FILE_EDIT_TOOLS.has(item.name) &&
-				item.status !== 'pending' &&
-				!isArtifactCall(item)
+				(item.status !== 'pending' || item.native_agent) &&
+				fileEditFromCall(item)
 			) {
-				// File edits show their diff in the chat instead of a collapsed row.
+				// File edits (ours or a coding agent's) show their diff in the chat.
 				flushGroup();
-				items.push({ type: 'file_change_item', item, output: outputMap.get(item.call_id) });
+				items.push({
+					type: 'file_change_item',
+					item,
+					edit: fileEditFromCall(item)!,
+					output: outputMap.get(item.call_id)
+				});
 			} else if (item.type === 'function_call') {
 				if (item.name !== 'ask_user' || item.status !== 'pending') {
 					ensureGroup();
@@ -611,7 +603,11 @@
 							{/if}
 						</div>
 					{:else if displayItem.type === 'file_change_item'}
-						<FileChangeCard item={displayItem.item} pairedOutput={displayItem.output} />
+						<FileChangeCard
+							item={displayItem.item}
+							edit={displayItem.edit}
+							pairedOutput={displayItem.output}
+						/>
 					{:else if displayItem.type === 'subagent_item'}
 						<SubagentCard item={displayItem.item} pairedOutput={displayItem.output} {chatId} />
 					{:else if displayItem.type === 'activity_group'}

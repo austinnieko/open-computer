@@ -64,6 +64,7 @@ export type ToolApprovalMode = 'ask' | 'auto' | 'full';
 export interface ChatSendParams {
 	tool_approval_mode?: ToolApprovalMode;
 	plan_mode?: boolean;
+	follow_edits?: boolean;
 	request_params?: Record<string, unknown>;
 	voice_mode?: boolean;
 }
@@ -146,7 +147,9 @@ export const updateChatTitle = (chatId: string, title: string) =>
 export const updateChatSettings = (chatId: string, modelId: string, params: ChatSendParams) =>
 	fetchJSON<{ ok: boolean }>(
 		`/api/chats/${chatId}/settings`,
-		jsonBody({ model_id: modelId, params })
+		// The backend route is PATCH; a POST here was rejected with 405, so chat
+		// settings (plan mode, tool permissions, follow edits) never saved.
+		{ ...jsonBody({ model_id: modelId, params }), method: 'PATCH' }
 	);
 
 export const forkChat = (chatId: string, messageId?: string | null) =>
