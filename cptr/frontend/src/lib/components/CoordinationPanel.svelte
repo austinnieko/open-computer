@@ -25,6 +25,7 @@
 		getCoordTaskDiff,
 		getCoordTaskReadiness,
 		pauseCoordTask,
+		startCoordTask,
 		publishCoordPr,
 		registerCoordTask,
 		removeCoordWorktree,
@@ -41,6 +42,9 @@
 		type TaskStatus
 	} from '$lib/apis/coordination';
 	import {
+		lifecycleOf,
+		checkoutOf,
+		type TaskLifecycle,
 		coordinationFocus,
 		coordinationOf,
 		displayStatus,
@@ -158,18 +162,93 @@
 	const byId = $derived(new Map(coord.tasks.map((task) => [task.id, task])));
 	const selected = $derived(selectedId ? (byId.get(selectedId) ?? null) : null);
 
-	const GROUPS: { key: string; statuses: TaskStatus[] }[] = [
-		{ key: 'running', statuses: ['running'] },
-		{ key: 'attention', statuses: ['blocked', 'failed'] },
-		{ key: 'waiting', statuses: ['queued', 'paused'] },
-		{ key: 'review', statuses: ['reviewing', 'integration_ready'] },
-		{ key: 'done', statuses: ['completed', 'ended'] }
-	];
+	// Lifecycle: every task is read as a stage + activity + one main action.
+	const lifeCtx = $derived({
+		titles: new Map(coord.tasks.map((task) => [task.id, task.title])),
+		runningWriters: coord.tasks.filter((task) => task.status === 'running' && task.worktree_path)
+			.length,
+		maxWriters: coord.maxWriters
+	});
+	const lives = $derived(new Map(coord.tasks.map((task) => [task.id, lifecycleOf(task, lifeCtx)])));
+	function life(task: CoordTask): TaskLifecycle {
+		return lives.get(task.id) ?? lifecycleOf(task, lifeCtx);
+	}
+	function lifeLabel(l: TaskLifecycle): string {
+		return l.stage === 'active' && l.activity
+			? $t(`coordination.activity.${l.activity}`)
+			: $t(`coordination.stage.${l.stage}`);
+	}
+	function lifeDetail(l: TaskLifecycle): string {
+		return l.detailKey ? $t(`coordination.detail.${l.detailKey}`, l.detailArgs ?? {}) : '';
+	}
+	const LIFE_CLASS: Record<string, string> = {
+		working: 'bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300',
+		in_line: 'bg-gray-100 text-gray-600 dark:bg-white/8 dark:text-gray-300',
+		needs_you: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
+		blocked: 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300',
+		stopped: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400',
+		draft:
+			'border border-dashed border-gray-300 text-gray-500 dark:border-white/15 dark:text-gray-400',
+		review: 'bg-violet-50 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300',
+		done: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400',
+		ended: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400'
+	};
+	function lifeClass(l: TaskLifecycle): string {
+		return LIFE_CLASS[l.stage === 'active' && l.activity ? l.activity : l.stage] ?? '';
+	}
+	const ACTION_ICON: Record<string, string> = {
+		start: 'play',
+		stop: 'stop',
+		reply: 'chat-bubble',
+		review: 'git-diff',
+		integrate: 'git-branch',
+		resume: 'play',
+		retry: 'refresh'
+	};
+	async function primary(task: CoordTask, l: TaskLifecycle) {
+		switch (l.action) {
+			case 'start':
+				return run(`start:${task.id}`, () => startCoordTask(task.id), $t('coordination.started'));
+			case 'stop':
+				return run(`pause:${task.id}`, () => pauseCoordTask(task.id));
+			case 'reply':
+				if (task.chat_id) openChatTab(task.chat_id);
+				return;
+			case 'review':
+				if (diffFor !== task.id) await loadDiff(task);
+				return;
+			case 'integrate':
+				return integrate();
+			case 'resume':
+			case 'retry':
+				return run(`resume:${task.id}`, () => resumeCoordTask(task.id));
+			case 'delete':
+				return deleteTask(task);
+		}
+	}
 
+	// Stages, in order; Done and Ended share the collapsible last group.
+	const STAGES = ['active', 'draft', 'review', 'done'] as const;
+	const ACTIVITY_ORDER: Record<string, number> = {
+		needs_you: 0,
+		blocked: 1,
+		working: 2,
+		in_line: 3,
+		stopped: 4
+	};
 	const grouped = $derived(
-		GROUPS.map((group) => ({
-			...group,
-			tasks: coord.tasks.filter((task) => group.statuses.includes(task.status))
+		STAGES.map((key) => ({
+			key,
+			tasks: coord.tasks
+				.filter((task) => {
+					const stage = life(task).stage;
+					return key === 'done' ? stage === 'done' || stage === 'ended' : stage === key;
+				})
+				.sort(
+					(a, b) =>
+						(ACTIVITY_ORDER[life(a).activity ?? ''] ?? 9) -
+						(ACTIVITY_ORDER[life(b).activity ?? ''] ?? 9)
+				)
 		})).filter((group) => group.tasks.length > 0)
 	);
 
@@ -385,7 +464,8 @@
 		testCommand: '',
 		dependsOn: [] as string[],
 		model: initialModel(),
-		base: ''
+		base: '',
+		startNow: true
 	});
 
 	// The model list can load after this panel mounts; fill the picker once it
@@ -402,13 +482,14 @@
 			testCommand: '',
 			dependsOn: [],
 			model: initialModel(),
-			base: ''
+			base: '',
+			startNow: true
 		};
 	}
 
 	async function createTask() {
 		if (!form.title.trim()) return;
-		if (form.startPrompt.trim() && !form.model) {
+		if (form.startPrompt.trim() && form.startNow && !form.model) {
 			toast.error($t('coordination.modelRequired'));
 			return;
 		}
@@ -422,7 +503,8 @@
 				start_prompt: form.startPrompt.trim() || undefined,
 				model_id: form.model ?? undefined,
 				test_command: form.testCommand.trim() || undefined,
-				base_ref: form.base || undefined
+				base_ref: form.base || undefined,
+				start_now: form.startNow
 			});
 			if (result.worktree?.error) toast.error(result.worktree.error);
 			selectedId = result.task.id;
@@ -604,6 +686,7 @@
 						</div>
 						{#each group.tasks as task (task.id)}
 							{@const worst = worstConflict(openConflicts, task.id)}
+							{@const rowLife = life(task)}
 							<button
 								class="task-row"
 								class:task-row-selected={task.id === selectedId}
@@ -633,10 +716,12 @@
 								<div
 									class="mt-0.5 flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-gray-500 dark:text-gray-400"
 								>
-									<span class="pill {STATUS_CLASS[displayStatus(task)]}"
-										>{statusLabel(displayStatus(task))}</span
-									>
-									{#if task.branch}<span class="truncate font-mono">{task.branch}</span>{/if}
+									<span class="pill {lifeClass(rowLife)}">{lifeLabel(rowLife)}</span>
+									{#if rowLife.activity === 'needs_you' && rowLife.detailText}
+										<span class="truncate text-amber-700 dark:text-amber-300"
+											>{rowLife.detailText}</span
+										>
+									{:else if task.branch}<span class="truncate font-mono">{task.branch}</span>{/if}
 									{#if task.pr_number}
 										<span class="shrink-0">#{task.pr_number}</span>
 									{/if}
@@ -708,6 +793,7 @@
 					<div class="empty">{$t('coordination.selectTask')}</div>
 				{:else}
 					{@const task = selected}
+					{@const taskLife = life(selected)}
 					<div class="space-y-4 p-3 sm:p-4">
 						<div>
 							<button
@@ -720,8 +806,10 @@
 								<h2 class="min-w-0 text-base font-semibold text-gray-900 dark:text-gray-50">
 									{task.title}
 								</h2>
-								<span class="pill {STATUS_CLASS[displayStatus(task)]}"
-									>{statusLabel(displayStatus(task))}</span
+								<span class="pill {lifeClass(taskLife)}"
+									>{taskLife.stage === 'active' && taskLife.activity
+										? `${$t('coordination.stage.active')} · ${lifeLabel(taskLife)}`
+										: lifeLabel(taskLife)}</span
 								>
 								{#if task.chat_id && coord.activeChats.has(task.chat_id)}
 									<span
@@ -737,20 +825,63 @@
 									{task.description}
 								</p>
 							{/if}
-							{#if displayStatus(task) === 'waiting_for_user'}
-								<p class="mt-1 text-xs text-gray-500">{$t('coordination.waitingForUserHint')}</p>
-							{:else if displayStatus(task) === 'waiting_slot'}
-								<p class="mt-1 text-xs text-gray-500">
-									{$t('coordination.waitingSlotHint', {
-										running: coord.tasks.filter((t) => t.status === 'running' && t.worktree_path)
-											.length,
-										max: coord.maxWriters
-									})}
-								</p>
-							{:else if task.meta.status_reason}
-								<p class="mt-1 text-xs text-gray-500">{task.meta.status_reason}</p>
-							{/if}
 						</div>
+
+						{#if !task.chat_missing}
+							{@const l = life(task)}
+							{@const checkout = checkoutOf(task)}
+							<!-- What is happening, and the one thing to do next. -->
+							<div class="next-step">
+								<div class="min-w-0 flex-1">
+									{#if lifeDetail(l)}<p>{lifeDetail(l)}</p>{/if}
+									{#if l.detailText}
+										<p class="mt-0.5 whitespace-pre-wrap font-medium">{l.detailText}</p>
+									{/if}
+									{#if !lifeDetail(l) && !l.detailText}
+										<p>{$t('coordination.detail.working')}</p>
+									{/if}
+								</div>
+								{#if l.action && l.action !== 'delete'}
+									<button
+										class={l.action === 'stop' ? 'btn-secondary' : 'btn-primary'}
+										disabled={busy === `start:${task.id}` ||
+											busy === `pause:${task.id}` ||
+											busy === `resume:${task.id}` ||
+											busy === 'integrate'}
+										onclick={() => primary(task, l)}
+									>
+										<Icon name={ACTION_ICON[l.action] ?? 'play'} size={13} />{$t(
+											`coordination.action.${l.action}`
+										)}
+									</button>
+								{/if}
+							</div>
+							{#if checkout?.note && !(l.activity === 'needs_you' && l.detailText)}
+								<div class="report">
+									<span class="label mb-0">{$t('coordination.lastReport')}</span>
+									<span
+										class="pill {checkout.kind === 'done' ? LIFE_CLASS.review : LIFE_CLASS.in_line}"
+										>{$t(`coordination.checkout.${checkout.kind}`)}</span
+									>
+									<p class="mt-1 whitespace-pre-wrap">{checkout.note}</p>
+								</div>
+							{/if}
+							{#if Array.isArray(task.meta.dependency_merges) && task.meta.dependency_merges.length}
+								<div class="report">
+									<span class="label mb-0">{$t('coordination.handoff')}</span>
+									<ul class="mt-1 space-y-0.5">
+										{#each task.meta.dependency_merges as merge}
+											<li>
+												{$t(`coordination.merge.${merge.result}`, {
+													task: titleOf(merge.task),
+													branch: merge.branch
+												})}
+											</li>
+										{/each}
+									</ul>
+								</div>
+							{/if}
+						{/if}
 
 						{#if task.chat_missing}
 							<!-- Its chat was deleted: nothing can run it, so offer removal up front. -->
@@ -783,13 +914,13 @@
 										: $t('coordination.viewDiff')}
 								</button>
 							{/if}
-							{#if ['running', 'queued', 'blocked', 'reviewing'].includes(task.status) && !task.chat_missing}
+							{#if ['blocked', 'reviewing'].includes(task.status) && !task.chat_missing}
 								<button
 									class="btn-secondary"
 									disabled={busy === `pause:${task.id}`}
 									onclick={() => run(`pause:${task.id}`, () => pauseCoordTask(task.id))}
 								>
-									<Icon name="stop" size={13} />{$t('coordination.pause')}
+									<Icon name="stop" size={13} />{$t('coordination.action.stop')}
 								</button>
 							{/if}
 							{#if !['completed', 'ended'].includes(task.status) && !task.chat_missing}
@@ -800,20 +931,6 @@
 									use:tooltip={$t('coordination.endHint')}
 								>
 									<Icon name="xmark" size={13} />{$t('coordination.end')}
-								</button>
-							{/if}
-							{#if (task.status === 'paused' || task.status === 'failed') && !task.chat_missing}
-								<button
-									class="btn-secondary"
-									disabled={busy === `resume:${task.id}`}
-									onclick={() => run(`resume:${task.id}`, () => resumeCoordTask(task.id))}
-									use:tooltip={task.status === 'failed'
-										? $t('coordination.retryHint')
-										: $t('coordination.resumeHint')}
-								>
-									<Icon name="play" size={13} />{task.status === 'failed'
-										? $t('coordination.retry')
-										: $t('coordination.resume')}
 								</button>
 							{/if}
 							{#if task.status === 'running'}
@@ -1276,6 +1393,17 @@
 					placeholder={$t('coordination.startPromptHint')}
 				></textarea>
 			</label>
+			{#if form.startPrompt.trim()}
+				<label class="flex items-start gap-2 text-xs text-gray-600 dark:text-gray-300">
+					<input type="checkbox" class="mt-0.5" bind:checked={form.startNow} />
+					<span>
+						{$t('coordination.startNow')}
+						<span class="block text-[0.6875rem] text-gray-400"
+							>{$t('coordination.startNowHint')}</span
+						>
+					</span>
+				</label>
+			{/if}
 			<div class="flex items-center gap-2">
 				<span class="label mb-0">{$t('coordination.model')}</span>
 				<ModelSelector bind:selectedModel={form.model} preferAbove={false} align="start" />
@@ -1503,6 +1631,30 @@
 	.icon-btn {
 		padding: 0.3125rem;
 		color: rgb(107 114 128);
+	}
+	.next-step {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 0.75rem;
+		padding: 0.625rem 0.75rem;
+		border-radius: 0.5rem;
+		font-size: 0.75rem;
+		color: rgb(55 65 81);
+		background: rgb(249 250 251);
+		border: 1px solid rgb(229 231 235);
+	}
+	:global(.dark) .next-step {
+		color: rgb(229 231 235);
+		background: rgb(255 255 255 / 0.04);
+		border-color: rgb(255 255 255 / 0.1);
+	}
+	.report {
+		font-size: 0.75rem;
+		color: rgb(75 85 99);
+	}
+	:global(.dark) .report {
+		color: rgb(209 213 219);
 	}
 	.btn-danger {
 		padding: 0.3125rem 0.625rem;

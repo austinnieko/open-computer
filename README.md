@@ -135,8 +135,15 @@ Run several coding agents on one repository without them overwriting each other.
 1. Open a Git repository as a workspace, click **+** in the tab bar and choose **Agents & tasks**.
 2. Click **New task**, one per ticket. Give it a title, paste the ticket text into the instructions, pick a model and, if the ticket needs another one finished first, tick **Depends on**.
 3. **Create task** makes a branch, a dedicated worktree under `.cptr-worktrees/<repo>/` next to your repo, and an agent chat that runs inside that worktree.
-4. Use **Open chat** to talk to that task's agent. The chat header shows a **Task worktree** chip with the branch and live status, so you always know where the agent is working.
-5. When a task is done: **Mark ready for review** → **Run tests** → **Integrate** → **Publish PR**. You merge the PR yourself.
+4. Click **Start** (or tick **Start now** when creating it, or just send a message in its chat). The task gets in line and its agent runs when a slot is free.
+5. Use **Open chat** to talk to that task's agent. The chat header shows a **Task worktree** chip with the branch and live status, so you always know where the agent is working.
+6. When the agent checks out as done, the task moves to **In review**: **Review changes** → **Run tests** → **Integrate** → **Publish PR**. You merge the PR yourself.
+
+**Task lifecycle.** Every task has a stage, **Draft → Active → In review → Done** (or **Ended**), and while Active one activity: **Working**, **In line** (waiting for a free slot), **Needs you**, **Blocked** or **Stopped**. Each task shows one main button for the next step: Start, Stop, Reply, Review changes, Integrate or Resume.
+
+**Check-in and check-out.** Every agent turn ends with a check-out line the coordinator reads, whatever the agent: `CHECKOUT: done - …`, `needs-input - …`, `blocked - …` or `continuing - …`. *done* moves the task to review and its note becomes the handoff; anything else, or no check-out, shows **Needs you** with the agent's question and frees its slot.
+
+**Handoff.** A task that depends on another starts by itself when that one passes integration. Its folder is prepared first (the dependency's branch is merged in when that is clean; a conflicting merge is aborted and left to the agent), and its agent's first brief carries the dependency's check-out note, branch and changed files. If a dependency is ended or fails, the dependent shows **Needs you** instead of waiting forever.
 
 ![A task's page: actions, dependencies and a detected conflict](./docs/images/coordination-task-detail-dependent-task.png)
 

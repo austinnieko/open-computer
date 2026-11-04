@@ -306,7 +306,10 @@ async def on_turn_start(chat_id: str, chat_meta: dict | None) -> str:
     if not (task.meta or {}).get("briefed_at"):
         # First turn in this task's chat: tell the agent what the task is, so
         # "start working on this" has something to refer to.
-        block = task_brief(task)
+        from cptr.utils.coordination import lifecycle
+
+        task = await lifecycle.ensure_dependency_merges(task)
+        block = task_brief(task) + await lifecycle.handoff_brief(task)
         await CoordTask.update_fields(task.id, meta={**(task.meta or {}), "briefed_at": now_ms()})
     block += await messages.take_delivery(task.id)
     if task.status == "blocked":
@@ -316,7 +319,9 @@ async def on_turn_start(chat_id: str, chat_meta: dict | None) -> str:
             + (f" ({reasons})" if reasons else "")
             + ". Avoid changes that deepen the conflict; resolve it or ask the user."
         )
-    return block
+    from cptr.utils.coordination.lifecycle import CHECKOUT_INSTRUCTIONS
+
+    return block + CHECKOUT_INSTRUCTIONS
 
 
 # Seconds to wait after a turn ends before calling the task idle: an agent often
@@ -339,13 +344,19 @@ async def _root_chat_id(chat_id: str) -> str:
 
 
 async def on_turn_end(chat_id: str, *, grace: float | None = None) -> str | None:
-    """A turn ended in ``chat_id``. If its task's agent is now idle, mark it waiting.
+    """A turn ended in ``chat_id``: read the agent's check-out once it is idle.
 
     Idle means: no turn running in the task chat or any of its sub-agent chats and
-    no pending timers. The task moves from ``running`` to ``queued`` with
-    ``meta.waiting_for_user`` (shown as "Waiting for you"), which frees its slot
-    so the scheduler can start the next queued task. The user's next message moves
-    it back to running. Returns the task id when it was marked waiting.
+    no pending timers. Then the agent's ``CHECKOUT:`` line decides where the task
+    goes (see ``lifecycle``):
+
+    * ``done``  -> ``reviewing`` (Review stage); its note becomes the handoff.
+    * anything else, or no check-out -> ``queued`` + ``meta.waiting_for_user``
+      (Needs you), with the agent's question or reason.
+
+    Either way the task's slot is freed and the scheduler runs again. The user's
+    next message moves a waiting task back to running. Returns the task id when
+    the task was moved.
     """
     from cptr.models.chats import Chat
     from cptr.utils.chat_task import get_active_chat_ids
@@ -366,11 +377,30 @@ async def on_turn_end(chat_id: str, *, grace: float | None = None) -> str | None
         return None  # still working through its sub-agents
     if await Chat.get_pending_timers(root):
         return None  # it scheduled itself to continue later
-    meta = {**(task.meta or {}), "waiting_for_user": now_ms()}
-    if not await CoordTask.update_fields(
-        task.id, expect_status="running", status="queued", meta=meta
-    ):
-        return None
+    from cptr.utils.coordination import lifecycle, registry
+
+    checkout = await lifecycle.last_reply_checkout(root)
+    meta = lifecycle.checkout_meta(task.meta, checkout)
+    meta.pop("waiting_for_user", None)
+    moved = False
+    if checkout and checkout["kind"] == "done":
+        await CoordTask.update_fields(task.id, meta=meta)
+        try:
+            await registry.set_status(
+                task.id, "reviewing", expect="running", reason="agent checked out: done"
+            )
+            moved = True
+        except registry.CoordinationError:
+            moved = False
+    if not moved:
+        if checkout and checkout["kind"] == "continuing":
+            # It said it would carry on, but nothing is running for it any more.
+            meta["checkout"]["stalled"] = True
+        meta["waiting_for_user"] = now_ms()
+        if not await CoordTask.update_fields(
+            task.id, expect_status="running", status="queued", meta=meta
+        ):
+            return None
     await _emit(
         {task.user_id},
         {"type": "coord:task", "task": (await CoordTask.get_by_id(task.id)).to_dict()},
