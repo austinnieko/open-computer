@@ -209,8 +209,7 @@ export const answerAskUser = (
 	callId: string,
 	answers: Record<string, string>,
 	timedOut = false
-) =>
-	resolveToolCall(chatId, messageId, callId, 'answer', { answers, timedOut });
+) => resolveToolCall(chatId, messageId, callId, 'answer', { answers, timedOut });
 
 export const cancelTask = (chatId: string, messageId: string) =>
 	fetchJSON(`/api/chats/${chatId}/messages/${messageId}/cancel`, { method: 'POST' });
@@ -289,3 +288,44 @@ export interface SubagentInfo {
 
 export const getSubagents = (chatId: string) =>
 	fetchJSON<{ subagents: SubagentInfo[] }>(`/api/chats/${chatId}/subagents`);
+
+export interface ChatStatsTotals {
+	input: number;
+	output: number;
+	reasoning: number;
+	cached: number;
+	total: number;
+	cost_usd: number;
+	duration_ms: number;
+}
+
+export interface ChatStats {
+	chat_id: string;
+	created_at: number;
+	updated_at: number;
+	is_active: boolean;
+	totals: ChatStatsTotals;
+	tools: { name: string; count: number; failed: number }[];
+	files: { path: string; edits: number }[];
+	models: { id: string; replies: number }[];
+	turns: {
+		id: string;
+		created_at: number;
+		tokens: number;
+		duration_ms: number;
+		tool_calls: number;
+		done: boolean;
+	}[];
+	user_messages: number;
+	subagents: {
+		count: number;
+		running: number;
+		tokens: number;
+		cost_usd: number;
+		tool_calls: number;
+	};
+	context_usage: ContextUsage | null;
+}
+
+/** Usage for one chat: tokens, time, tools, files and sub-agents. */
+export const getChatStats = (chatId: string) => fetchJSON<ChatStats>(`/api/chats/${chatId}/stats`);

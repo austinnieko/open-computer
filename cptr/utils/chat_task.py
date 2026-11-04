@@ -1550,6 +1550,7 @@ async def run_chat_task(
     output_queue: asyncio.Queue | None = None,
 ):
     """Plain async function. Makes raw API calls in a loop."""
+    turn_started_ms = now_ms()
     if request is None:
         try:
             from cptr.app import app as cptr_app
@@ -1663,6 +1664,16 @@ async def run_chat_task(
 
     async def _save_message(save_reason: str, **kwargs) -> bool:
         """Persist a message update and log enough detail to debug skipped saves."""
+        if kwargs.get("done") is True:
+            # Record how long the reply took, for the chat's stats panel.
+            usage = kwargs.get("usage")
+            if "usage" not in kwargs:
+                existing = await ChatMessage.get_by_id(message_id)
+                usage = existing.usage if existing else None
+            kwargs["usage"] = {
+                **(usage if isinstance(usage, dict) else {}),
+                "duration_ms": max(0, now_ms() - turn_started_ms),
+            }
         saved_output = kwargs.get("output", output_items)
         saved_content = kwargs.get("content", content)
         counts, reasoning_count, reasoning_chars = _output_debug_stats(saved_output)

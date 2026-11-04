@@ -37,6 +37,8 @@
 	import { trackSubagents } from '$lib/stores/subagents.svelte';
 	import { setFollowEdits, watchChatEdits } from '$lib/stores/followEdits.svelte';
 	import AgentsPanel from './AgentsPanel.svelte';
+	import ChatStatsPanel from './ChatStatsPanel.svelte';
+	import { chatStatsOn } from '$lib/stores/chatStats';
 	import { onMount, onDestroy, tick, untrack } from 'svelte';
 	import { get } from 'svelte/store';
 	import {
@@ -370,6 +372,24 @@
 		workspace ? getPathDisplayName(workspace, 'workspace') : 'Computer'
 	);
 	const displayChatTitle = $derived(chatTitle || firstUserMessageTitle() || workspaceDisplayName);
+
+	// Stats beside the conversation: docked in the side space when the pane is
+	// wide enough, otherwise opened on demand over the chat.
+	const STATS_DOCK_WIDTH = 1280;
+	let panelWidth = $state(0);
+	let statsOverlay = $state(false);
+	const statsOn = $derived($chatStatsOn);
+	function setStatsPref(on: boolean) {
+		chatStatsOn.set(on);
+	}
+	const statsDocked = $derived(!$widescreenMode && panelWidth >= STATS_DOCK_WIDTH);
+	const statsVisible = $derived(
+		!!chatId && !chatId.startsWith('new-') && (statsDocked ? statsOn : statsOverlay)
+	);
+	function toggleStats() {
+		if (statsDocked) setStatsPref(!statsOn);
+		else statsOverlay = !statsOverlay;
+	}
 	const runningCommandSessions = $derived(commandSessions.filter((session) => !session.done));
 	const summaryCount = $derived(runningCommandSessions.length);
 	const statusButtonClass =
@@ -1766,6 +1786,7 @@
 <div
 	class="app-theme relative flex h-full flex-col"
 	style="background: var(--app-bg); color: var(--app-fg);"
+	bind:clientWidth={panelWidth}
 >
 	{#if !isLanding}
 		<div
@@ -1783,6 +1804,20 @@
 				{displayChatTitle}
 			</div>
 			<div class="flex shrink-0 items-center gap-0.5">
+				{#if chatId && !chatId.startsWith('new-')}
+					<button
+						type="button"
+						class="relative flex size-6 shrink-0 items-center justify-center rounded-lg transition-colors duration-75 {statusButtonClass} {statsVisible
+							? 'text-gray-700! dark:text-gray-200!'
+							: ''}"
+						aria-label={statsVisible ? 'Hide chat stats' : 'Show chat stats'}
+						aria-pressed={statsVisible}
+						use:tooltip={statsVisible ? 'Hide chat stats' : 'Chat stats'}
+						onclick={toggleStats}
+					>
+						<Icon name="stats" size={14} />
+					</button>
+				{/if}
 				<button
 					type="button"
 					class="relative flex size-6 shrink-0 items-center justify-center rounded-lg transition-colors duration-75 {statusButtonClass}"
@@ -1921,6 +1956,20 @@
 			</div>
 		{/if}
 
+		{#if statsVisible && chatId}
+			<div
+				class="chat-stats-dock {statsDocked ? 'is-docked' : 'is-overlay'}"
+				style="background: {statsDocked ? 'transparent' : 'var(--app-bg)'};"
+			>
+				<ChatStatsPanel
+					{chatId}
+					{workspace}
+					running={streaming || sending}
+					onclose={() => (statsDocked ? setStatsPref(false) : (statsOverlay = false))}
+				/>
+			</div>
+		{/if}
+
 		<!-- Input area -->
 		<div class="px-4 py-3" style="background: var(--app-bg);">
 			<div class="{$widescreenMode ? 'max-w-full' : 'max-w-2xl'} mx-auto w-full relative">
@@ -2012,3 +2061,25 @@
 		}}
 	/>
 {/if}
+
+<style>
+	.chat-stats-dock {
+		position: absolute;
+		top: 2.75rem;
+		right: 1rem;
+		bottom: 8rem;
+		width: 17rem;
+		z-index: 20;
+		overflow-y: auto;
+		scrollbar-width: thin;
+		padding-bottom: 0.5rem;
+	}
+	.chat-stats-dock.is-overlay {
+		bottom: auto;
+		max-height: calc(100% - 11rem);
+		padding: 0.75rem;
+		border-radius: 1rem;
+		border: 1px solid color-mix(in oklab, var(--app-fg) 10%, transparent);
+		box-shadow: 0 12px 32px -12px rgb(0 0 0 / 0.25);
+	}
+</style>

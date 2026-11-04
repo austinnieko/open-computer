@@ -746,6 +746,190 @@ async def get_chat_subagents(chat_id: str, request: Request):
     return {"subagents": rows}
 
 
+_EDIT_TOOLS = {"edit_file", "multi_edit_file", "write_file", "create_file"}
+_AGENT_EDIT_TITLES = {
+    "write",
+    "create",
+    "edit",
+    "multiedit",
+    "multi_edit",
+    "patch",
+    "apply_patch",
+    "str_replace",
+    "str_replace_editor",
+}
+_PATH_KEYS = ("path", "filePath", "file_path", "filepath", "file", "target_file")
+
+
+def _call_args(item: dict) -> dict:
+    raw = item.get("arguments")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _usage_numbers(usage: dict | None) -> dict:
+    """Tokens, cost and time for one reply. Agent replies keep per-prompt
+    sums under ``turn``; API replies store the last call's usage."""
+    usage = usage if isinstance(usage, dict) else {}
+    src = usage.get("turn") if isinstance(usage.get("turn"), dict) else usage
+
+    def num(key: str, *alts: str) -> float:
+        for k in (key, *alts):
+            v = src.get(k)
+            if isinstance(v, (int, float)) and v > 0:
+                return v
+        return 0
+
+    input_tokens = int(num("input_tokens", "prompt_tokens"))
+    output_tokens = int(num("output_tokens", "completion_tokens"))
+    details = src.get("completion_tokens_details")
+    reasoning = int(num("reasoning_tokens")) or int(
+        (details or {}).get("reasoning_tokens") or 0 if isinstance(details, dict) else 0
+    )
+    prompt_details = src.get("prompt_tokens_details")
+    cached = int(num("cache_read_input_tokens", "cached_tokens")) or int(
+        (prompt_details or {}).get("cached_tokens") or 0 if isinstance(prompt_details, dict) else 0
+    )
+    total = int(num("total_tokens")) or input_tokens + output_tokens
+    duration = usage.get("duration_ms")
+    return {
+        "input": input_tokens,
+        "output": output_tokens,
+        "reasoning": reasoning,
+        "cached": cached,
+        "total": total,
+        "cost_usd": float(num("cost_usd")),
+        "duration_ms": int(duration) if isinstance(duration, (int, float)) and duration > 0 else 0,
+    }
+
+
+def _tally_messages(messages: list, workspace: str = "") -> dict:
+    totals = {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cached": 0,
+        "total": 0,
+        "cost_usd": 0.0,
+        "duration_ms": 0,
+    }
+    tools: dict[str, dict] = {}
+    files: dict[str, int] = {}
+    models: dict[str, int] = {}
+    turns = []
+    user_messages = 0
+    ws = workspace.rstrip("/")
+    for m in messages:
+        if m.role == "user":
+            user_messages += 1
+            continue
+        if m.role != "assistant":
+            continue
+        numbers = _usage_numbers(m.usage)
+        for key in totals:
+            totals[key] += numbers[key]
+        if m.model:
+            models[m.model] = models.get(m.model, 0) + 1
+        calls = 0
+        for item in m.output or []:
+            if not isinstance(item, dict) or item.get("type") != "function_call":
+                continue
+            calls += 1
+            args = _call_args(item)
+            name = str(item.get("name") or "tool")
+            path = ""
+            if name == "agent_tool":
+                name = str(args.get("title") or "agent tool").strip() or "agent tool"
+                agent_input = args.get("input") if isinstance(args.get("input"), dict) else {}
+                if name.lower() in _AGENT_EDIT_TITLES:
+                    path = next(
+                        (agent_input[k] for k in _PATH_KEYS if isinstance(agent_input.get(k), str)),
+                        "",
+                    )
+            elif name in _EDIT_TOOLS and not args.get("artifact_type"):
+                path = str(args.get("path") or "")
+            entry = tools.setdefault(name, {"name": name, "count": 0, "failed": 0})
+            entry["count"] += 1
+            if item.get("status") == "failed":
+                entry["failed"] += 1
+            if path:
+                if ws and path.startswith(ws + "/"):
+                    path = path[len(ws) + 1 :]
+                files[path] = files.get(path, 0) + 1
+        turns.append(
+            {
+                "id": m.id,
+                "created_at": m.created_at,
+                "tokens": numbers["total"],
+                "duration_ms": numbers["duration_ms"],
+                "tool_calls": calls,
+                "done": bool(m.done),
+            }
+        )
+    totals["cost_usd"] = round(totals["cost_usd"], 6)
+    return {
+        "totals": totals,
+        "tools": sorted(tools.values(), key=lambda t: -t["count"]),
+        "files": [{"path": p, "edits": n} for p, n in sorted(files.items(), key=lambda kv: -kv[1])],
+        "models": [
+            {"id": k, "replies": v} for k, v in sorted(models.items(), key=lambda kv: -kv[1])
+        ],
+        "turns": turns,
+        "user_messages": user_messages,
+    }
+
+
+@router.get("/{chat_id}/stats")
+async def get_chat_stats(chat_id: str, request: Request):
+    """Usage for one chat (tokens, time, tools, files, sub-agents) for the
+    stats panel beside the chat."""
+    from cptr.utils.chat_task import get_active_chat_ids
+
+    user_id = _get_user(request)
+    chat = await Chat.get_by_id(chat_id)
+    if not chat or chat.user_id != user_id:
+        raise HTTPException(404, "chat not found")
+    workspace = str((chat.meta or {}).get("workspace") or "")
+    stats = _tally_messages(await ChatMessage.get_all_by_chat(chat_id), workspace)
+
+    active = get_active_chat_ids()
+    children = [
+        c
+        for c in await Chat.get_internal_descendants(chat_id)
+        if (c.meta or {}).get("type") == "subagent"
+    ]
+    agents = {"count": 0, "running": 0, "tokens": 0, "cost_usd": 0.0, "tool_calls": 0}
+    for child in children:
+        child_stats = _tally_messages(await ChatMessage.get_all_by_chat(child.id), workspace)
+        agents["count"] += 1
+        agents["running"] += int(child.id in active)
+        agents["tokens"] += child_stats["totals"]["total"]
+        agents["cost_usd"] += child_stats["totals"]["cost_usd"]
+        agents["tool_calls"] += sum(t["count"] for t in child_stats["tools"])
+        for f in child_stats["files"]:
+            match = next((x for x in stats["files"] if x["path"] == f["path"]), None)
+            if match:
+                match["edits"] += f["edits"]
+            else:
+                stats["files"].append(dict(f))
+    agents["cost_usd"] = round(agents["cost_usd"], 6)
+    stats["files"].sort(key=lambda f: -f["edits"])
+
+    return {
+        **stats,
+        "chat_id": chat_id,
+        "created_at": chat.created_at,
+        "updated_at": chat.updated_at,
+        "is_active": chat_id in active,
+        "subagents": agents,
+        "context_usage": await _get_chat_context_usage(request, chat, None),
+    }
+
+
 @router.get("/{chat_id}")
 async def get_chat(
     chat_id: str,

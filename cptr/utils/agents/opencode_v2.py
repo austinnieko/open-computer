@@ -232,6 +232,8 @@ class EventTranslator:
         self.started = False
         self.finished = False
         self.error: str | None = None
+        # Summed from session.step.ended / step.failed (tokens and USD cost).
+        self.usage: dict[str, Any] = {}
 
     def matches(self, envelope: dict[str, Any]) -> bool:
         data = envelope.get("data")
@@ -300,6 +302,9 @@ class EventTranslator:
             return [self._tool(data, "failed", output)]
         if event_type == "permission.asked":
             return self._permission_notice(data)
+        if event_type in ("session.step.ended", "session.step.failed"):
+            self._add_usage(data)
+            return []
         if event_type == "session.execution.failed":
             error = data.get("error") if isinstance(data.get("error"), dict) else {}
             self.error = str(error.get("message") or "OpenCode run failed")
@@ -315,6 +320,38 @@ class EventTranslator:
         elif event_type == "session.idle" and self.started:
             self.finished = True
         return []
+
+    def _add_usage(self, data: dict[str, Any]) -> None:
+        """Record a step's tokens and cost.
+
+        The standard fields hold the latest step (its input is the context
+        size, which compaction and the context meter rely on); ``turn`` holds
+        the sums over every step in this prompt.
+        """
+        tokens = data.get("tokens") if isinstance(data.get("tokens"), dict) else {}
+        cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
+
+        def num(value: Any) -> float:
+            return value if isinstance(value, (int, float)) and value > 0 else 0
+
+        step = {
+            "input_tokens": int(num(tokens.get("input"))),
+            "output_tokens": int(num(tokens.get("output"))),
+            "reasoning_tokens": int(num(tokens.get("reasoning"))),
+            "cache_read_input_tokens": int(num(cache.get("read"))),
+            "cache_creation_input_tokens": int(num(cache.get("write"))),
+        }
+        turn = dict(self.usage.get("turn") or {})
+        for key, value in step.items():
+            turn[key] = turn.get(key, 0) + value
+        turn["total_tokens"] = turn["input_tokens"] + turn["output_tokens"]
+        turn["cost_usd"] = round(turn.get("cost_usd", 0) + num(data.get("cost")), 6)
+        turn["steps"] = turn.get("steps", 0) + 1
+        self.usage = {
+            **step,
+            "total_tokens": step["input_tokens"] + step["output_tokens"],
+            "turn": turn,
+        }
 
     def _permission_notice(self, data: dict[str, Any]) -> list[AgentEvent]:
         """One short line per new permission request; the how-to only once."""
