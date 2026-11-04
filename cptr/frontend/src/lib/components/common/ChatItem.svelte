@@ -18,8 +18,18 @@
 		/** Shown as open (in a pane); with onclose, gets a close button. */
 		isOpen?: boolean;
 		onclose?: () => void;
+		/** Small letter badge before the title (e.g. A = task agent, C = chat). */
+		badge?: { letter: string; tone: string; label: string };
 	}
-	let { chat, isSelected = false, onclick, onmenu, isOpen = false, onclose }: Props = $props();
+	let {
+		chat,
+		isSelected = false,
+		onclick,
+		onmenu,
+		isOpen = false,
+		onclose,
+		badge
+	}: Props = $props();
 	let status = $derived($chatStatuses.get(chat.id));
 	let active = $derived(status?.active ?? chat.is_active ?? false);
 	let unread = $derived(
@@ -62,6 +72,11 @@
 	{/if}
 	{#if unread}
 		<span class="size-1.5 shrink-0 rounded-full bg-sky-500" aria-hidden="true"></span>
+	{/if}
+	{#if badge}
+		<span class="chat-badge tone-{badge.tone}" title={badge.label} aria-label={badge.label}
+			>{badge.letter}</span
+		>
 	{/if}
 	<span
 		class="flex-1 text-xs truncate min-w-0 {isSelected
@@ -117,3 +132,77 @@
 		</button>
 	{/if}
 </div>
+
+<style>
+	.chat-badge {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		width: 0.875rem;
+		height: 0.875rem;
+		border-radius: 0.25rem;
+		font-size: 0.5625rem;
+		font-weight: 600;
+		line-height: 1;
+		color: var(--badge-fg);
+		background: var(--badge-bg);
+	}
+	/* Tones: light first, dark under :global(.dark). */
+	.tone-neutral {
+		--badge-fg: #6b7280;
+		--badge-bg: rgb(107 114 128 / 0.12);
+	}
+	.tone-running {
+		--badge-fg: #047857;
+		--badge-bg: rgb(16 185 129 / 0.16);
+	}
+	.tone-waiting {
+		--badge-fg: #0369a1;
+		--badge-bg: rgb(14 165 233 / 0.14);
+	}
+	.tone-attention {
+		--badge-fg: #b45309;
+		--badge-bg: rgb(245 158 11 / 0.18);
+	}
+	.tone-review {
+		--badge-fg: #6d28d9;
+		--badge-bg: rgb(139 92 246 / 0.15);
+	}
+	.tone-failed {
+		--badge-fg: #b91c1c;
+		--badge-bg: rgb(239 68 68 / 0.14);
+	}
+	.tone-done {
+		--badge-fg: #9ca3af;
+		--badge-bg: rgb(156 163 175 / 0.12);
+	}
+	:global(.dark) .tone-neutral {
+		--badge-fg: #9ca3af;
+		--badge-bg: rgb(255 255 255 / 0.07);
+	}
+	:global(.dark) .tone-running {
+		--badge-fg: #6ee7b7;
+		--badge-bg: rgb(16 185 129 / 0.18);
+	}
+	:global(.dark) .tone-waiting {
+		--badge-fg: #7dd3fc;
+		--badge-bg: rgb(14 165 233 / 0.18);
+	}
+	:global(.dark) .tone-attention {
+		--badge-fg: #fcd34d;
+		--badge-bg: rgb(245 158 11 / 0.18);
+	}
+	:global(.dark) .tone-review {
+		--badge-fg: #c4b5fd;
+		--badge-bg: rgb(139 92 246 / 0.2);
+	}
+	:global(.dark) .tone-failed {
+		--badge-fg: #fca5a5;
+		--badge-bg: rgb(239 68 68 / 0.18);
+	}
+	:global(.dark) .tone-done {
+		--badge-fg: #6b7280;
+		--badge-bg: rgb(255 255 255 / 0.05);
+	}
+</style>

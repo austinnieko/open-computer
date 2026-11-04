@@ -8,9 +8,10 @@
 		activeTab,
 		currentWorkspace,
 		openChatInSplit,
+		openCoordinationTab,
 		closeTab
 	} from '$lib/stores';
-	import { chatEnabled, updateChatStatuses } from '$lib/stores/chat';
+	import { chatEnabled, chatStatuses, updateChatStatuses } from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import {
 		deleteChat as apiDeleteChat,
@@ -24,6 +25,11 @@
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import ChatItem from './common/ChatItem.svelte';
 	import { describeActivity, subagentsOf, trackSubagents } from '$lib/stores/subagents.svelte';
+	import {
+		coordinationOf,
+		displayStatus,
+		trackCoordination
+	} from '$lib/stores/coordination.svelte';
 	import DropdownMenu from './DropdownMenu.svelte';
 	import Icon from './Icon.svelte';
 
@@ -99,6 +105,48 @@
 		}
 		return out;
 	});
+	// A/C badges: task agent chats vs. normal chats, coloured by status. Task
+	// statuses come from the open workspace's Agents data.
+	$effect(() => {
+		const path = currentPath;
+		if (!path) return;
+		return trackCoordination(path);
+	});
+	const taskByChat = $derived.by(() => {
+		const map = new Map<string, ReturnType<typeof coordinationOf>['tasks'][number]>();
+		if (!currentPath) return map;
+		for (const task of coordinationOf(currentPath).tasks) {
+			if (task.chat_id) map.set(task.chat_id, task);
+		}
+		return map;
+	});
+	const TASK_TONE: Record<string, string> = {
+		running: 'running',
+		queued: 'waiting',
+		awaiting_input: 'waiting',
+		blocked: 'attention',
+		paused: 'attention',
+		reviewing: 'review',
+		integration_ready: 'review',
+		failed: 'failed',
+		completed: 'done',
+		ended: 'done'
+	};
+	function badgeFor(chat: ChatInfo): { letter: string; tone: string; label: string } | undefined {
+		if (isDraftId(chat.id)) return undefined;
+		const taskId = (chat.meta as Record<string, unknown> | null)?.coord_task_id;
+		const task = taskByChat.get(chat.id);
+		if (task || taskId) {
+			const status = task ? displayStatus(task) : '';
+			const label = status ? `Task agent · ${$t(`coordination.status.${status}`)}` : 'Task agent';
+			return { letter: 'A', tone: TASK_TONE[status] ?? 'neutral', label };
+		}
+		const active = $chatStatuses.get(chat.id)?.active ?? chat.is_active ?? false;
+		return active
+			? { letter: 'C', tone: 'running', label: 'Chat · Working' }
+			: { letter: 'C', tone: 'neutral', label: 'Chat' };
+	}
+	const isDraftId = (id: string) => id.startsWith('new-') || id.startsWith('pending-');
 	const openChatIds = $derived(new Set(openChats.map((o) => o.chat.id)));
 
 	function closeOpenChat(o: OpenChat) {
@@ -266,6 +314,20 @@
 		chatMenu = null;
 	}
 
+	/** Open the workspace, then its Agents & tasks dashboard. */
+	async function handleOpenAgents(path: string) {
+		closeWsMenu();
+		if (currentPath !== path) {
+			await goto(`/?workspace=${encodeURIComponent(path)}`);
+			// The workspace store switches after navigation; wait briefly for it.
+			for (let i = 0; i < 40 && currentPath !== path; i++) {
+				await new Promise((r) => setTimeout(r, 50));
+			}
+		}
+		if (currentPath === path) openCoordinationTab();
+		closeMobileSidebar();
+	}
+
 	async function handleRemoveWorkspace(path: string) {
 		closeWsMenu();
 		await removeWorkspace(path);
@@ -276,7 +338,14 @@
 		if (!chatMenu) return;
 		const { chatId, wsPath } = chatMenu;
 		closeChatMenu();
-		await apiDeleteChat(chatId);
+		try {
+			await apiDeleteChat(chatId);
+		} catch (err) {
+			// Already gone (e.g. deleted elsewhere): still clear the stale row.
+			if ((err as { status?: number })?.status !== 404) throw err;
+		}
+		// An open chat is listed from its tab, so close the tab too or the row stays.
+		for (const o of openChats.filter((o) => o.chat.id === chatId)) closeOpenChat(o);
 		const chats = wsChatsCache.get(wsPath) ?? [];
 		wsChatsCache = new Map([...wsChatsCache, [wsPath, chats.filter((chat) => chat.id !== chatId)]]);
 		if (currentPath === wsPath && currentChatId === chatId) {
@@ -586,9 +655,10 @@
 		{chat}
 		isSelected={chat.id === currentChatId}
 		isOpen={!!open}
+		badge={badgeFor(chat)}
 		onclick={() => openChat(chat.id, wsPath)}
 		onclose={open ? () => closeOpenChat(open) : undefined}
-		onmenu={open && !chat.created_at ? undefined : (e) => openChatMenu(e, chat.id, wsPath)}
+		onmenu={isDraftId(chat.id) ? undefined : (e) => openChatMenu(e, chat.id, wsPath)}
 	/>
 	{#if agents.length}
 		{@const branchOpen = agentBranchOpen(chat.id)}
@@ -629,6 +699,11 @@
 	<DropdownMenu
 		anchor={wsMenuAnchor}
 		items={[
+			{
+				label: $t('bar.agentsDashboard'),
+				icon: 'list',
+				onclick: () => handleOpenAgents(wsMenuPath!)
+			},
 			{
 				label: $t('sidebar.remove'),
 				icon: 'xmark',
