@@ -449,3 +449,31 @@ class MarkDoneRouteTests(ApiTestCase):
         r = await self.post(f"/tasks/{a['id']}/done")
         self.assertEqual(r.status_code, 200, r.text)
         await self._assert_dependent_starts(a, b)
+
+    async def test_a_late_turn_end_does_not_undo_done(self):
+        """The stopped turn's end (and a failed-turn event) arrive after Mark done."""
+        from cptr.models import ChatMessage
+        from cptr.models.coordination import CoordTask
+        from cptr.utils.config import now_ms
+
+        a, b = await self._pair()
+        task = await CoordTask.get_by_id(a["id"])
+        self.assertEqual(task.status, "running")
+        r = await self.post(f"/tasks/{a['id']}/done")
+        self.assertEqual(r.status_code, 200, r.text)
+        # What the interrupted turn leaves behind, then its end-of-turn hook.
+        await ChatMessage.create(
+            chat_id=task.chat_id,
+            role="assistant",
+            content="CHECKOUT: blocked - interrupted",
+            done=True,
+            created_at=now_ms(),
+        )
+        self.assertIsNone(await coordinator.on_turn_end(task.chat_id, grace=0))
+
+        class _Ev:
+            event = "chat.failed"
+            subject = {"id": task.chat_id}
+
+        await coordinator.CoordinationEventSink().handle_event(_Ev())
+        await self._assert_dependent_starts(a, b)
