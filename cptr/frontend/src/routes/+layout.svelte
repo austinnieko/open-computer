@@ -3,7 +3,6 @@
 	import '@xterm/xterm/css/xterm.css';
 
 	import { onMount } from 'svelte';
-	import { onNavigate } from '$app/navigation';
 	import { page } from '$app/stores';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
@@ -54,35 +53,6 @@
 	import SetupWizard from '$lib/components/SetupWizard.svelte';
 
 	let { children } = $props();
-
-	// A quick cross-fade between pages (Home, a workspace, Agents, Scheduled…)
-	// instead of a hard cut. The sidebar stays put (it has its own transition
-	// name). Skipped where unsupported, for reduced motion, and for in-page
-	// changes such as switching chats within the same workspace.
-	onNavigate((navigation) => {
-		if (typeof document === 'undefined' || !('startViewTransition' in document)) return;
-		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-		if (document.visibilityState !== 'visible') return; // hidden pages abort transitions
-		const from = navigation.from?.url;
-		const to = navigation.to?.url;
-		if (!from || !to) return;
-		const workspace = (u: URL) => u.searchParams.get('workspace') ?? '';
-		if (from.pathname === to.pathname && workspace(from) === workspace(to)) return;
-		return new Promise<void>((resolve) => {
-			type ViewTransition = { ready: Promise<void>; finished: Promise<void> };
-			const transition = (
-				document as Document & {
-					startViewTransition: (cb: () => Promise<void>) => ViewTransition;
-				}
-			).startViewTransition(async () => {
-				resolve();
-				await navigation.complete;
-			});
-			// An aborted fade (say the window was hidden mid-way) is harmless.
-			transition.ready.catch(() => {});
-			transition.finished.catch(() => {});
-		});
-	});
 	let showSettings = $state(false);
 	let settingsTab = $state('general');
 	let showUpdateToast = $state(false);

@@ -409,16 +409,3 @@
 		height: 2rem;
 	}
 }
-
-/* Page changes: a short cross-fade (see onNavigate in +layout.svelte). */
-::view-transition-old(root),
-::view-transition-new(root) {
-	animation-duration: 140ms;
-	animation-timing-function: ease-out;
-}
-.sidebar {
-	view-transition-name: sidebar;
-}
-::view-transition-group(sidebar) {
-	animation: none;
-}
