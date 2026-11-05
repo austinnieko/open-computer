@@ -361,3 +361,51 @@
 	color: var(--app-fg);
 	border-color: var(--app-border);
 }
+
+/* ── Touch (phones, tablets, the installed iPhone app) ─────────────
+ * Only for devices without a hovering pointer, so the desktop layout is
+ * unchanged. Hover-only controls become visible, and tap targets grow to
+ * at least ~36px. Mark elements with:
+ *   .touch-show    shown on touch even though it fades in on hover elsewhere
+ *   .touch-hide    hidden on touch (keyboard hints and the like)
+ *   .touch-target  at least 36x36 on touch
+ *   .touch-icon    32 wide x 36 tall (icon buttons in dense rows)
+ *   .touch-tall    36 tall, nearly as narrow as it is (chevrons)
+ *   .touch-row     rows at least 44 tall
+ */
+* {
+	-webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: none) and (pointer: coarse) {
+	.touch-show {
+		opacity: 1 !important;
+	}
+	.touch-hide {
+		display: none !important;
+	}
+	.touch-target {
+		min-width: 2.25rem;
+		min-height: 2.25rem;
+	}
+	.touch-row {
+		min-height: 2.75rem;
+	}
+	/* Compact icon buttons in dense rows: tall enough to hit, narrow enough to fit. */
+	.touch-icon {
+		min-width: 2rem;
+		min-height: 2.25rem;
+	}
+	.touch-tall {
+		min-width: 1.25rem;
+		min-height: 2.25rem;
+	}
+	/* Sidebar chat rows and their buttons. */
+	.chat-row {
+		height: 2.5rem;
+	}
+	.chat-row-btn {
+		width: 2rem;
+		height: 2rem;
+	}
+}

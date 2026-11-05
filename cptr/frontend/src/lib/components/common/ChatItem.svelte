@@ -57,7 +57,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-	class="group/chat flex items-center gap-1.5 w-full h-7 px-2 rounded-lg cursor-pointer transition-colors duration-75
+	class="chat-row group/chat flex items-center gap-1.5 w-full h-7 px-2 rounded-lg cursor-pointer transition-colors duration-75
 		{isSelected ? 'bg-gray-200/60 dark:bg-white/8' : 'hover:bg-gray-100/60 dark:hover:bg-white/[0.04]'}"
 	role="button"
 	tabindex="0"
@@ -97,7 +97,7 @@
 	{/if}
 	{#if onclose}
 		<button
-			class="{isSelected
+			class="chat-row-btn {isSelected
 				? 'flex'
 				: 'hidden group-hover/chat:flex'} items-center justify-center w-5 h-5 rounded shrink-0 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-white/10 transition-all duration-75"
 			onclick={(e) => {
@@ -122,7 +122,7 @@
 	{/if}
 	{#if onmenu}
 		<button
-			class="flex items-center justify-center w-5 h-5 rounded shrink-0 text-gray-300 dark:text-gray-700 hover:text-gray-500 dark:hover:text-gray-400 hover:bg-gray-200 dark:hover:bg-white/8 transition-all duration-75"
+			class="chat-row-btn flex items-center justify-center w-5 h-5 rounded shrink-0 text-gray-300 dark:text-gray-700 hover:text-gray-500 dark:hover:text-gray-400 hover:bg-gray-200 dark:hover:bg-white/8 transition-all duration-75"
 			onclick={(e) => {
 				e.stopPropagation();
 				onmenu?.(e);
