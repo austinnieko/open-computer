@@ -11,7 +11,17 @@
 import { untrack } from 'svelte';
 import { goto } from '$app/navigation';
 import { get } from 'svelte/store';
-import { getCoordSummary, type CoordTask, type TaskUsage } from '$lib/apis/coordination';
+import {
+	getCoordSummary,
+	markCoordTaskDone,
+	pauseCoordTask,
+	resumeCoordTask,
+	startCoordTask,
+	type CoordTask,
+	type TaskUsage
+} from '$lib/apis/coordination';
+import { getChat, sendMessage } from '$lib/apis/chat';
+import { requestConfirm } from '$lib/stores/confirm';
 import { socketStore } from '$lib/stores/socket.svelte';
 import { addWorkspace, currentWorkspace, openCoordinationTab, workspaceList } from '$lib/stores';
 import { coordinationFocus, lifecycleOf, type TaskLifecycle } from './coordination.svelte';
@@ -60,6 +70,8 @@ const state = $state({
 	usage: {} as Record<string, TaskUsage>,
 	usageTotals: null as TaskUsage | null,
 	conflicts: {} as Record<string, number>,
+	/** task id -> ids of the tasks it depends on */
+	dependsOn: {} as Record<string, string[]>,
 	loaded: false,
 	loading: false,
 	error: ''
@@ -86,6 +98,9 @@ async function load() {
 			state.usageTotals = data.usage.totals;
 		}
 		if (data.conflicts) state.conflicts = data.conflicts;
+		const deps: Record<string, string[]> = {};
+		for (const d of data.dependencies ?? []) (deps[d.task_id] ??= []).push(d.depends_on);
+		state.dependsOn = deps;
 		state.error = '';
 	} catch (error: any) {
 		if (mine === seq) state.error = error?.message ?? String(error);
@@ -157,13 +172,22 @@ export function stateOf(life: TaskLifecycle): AgentState {
 /** Every task as a row, most urgent first. */
 export function agentRows(): AgentRow[] {
 	const titles = new Map(state.tasks.map((t) => [t.id, t.title]));
+	const statuses = new Map(state.tasks.map((t) => [t.id, t.status]));
 	return state.tasks
 		.map((task) => {
 			const repo = norm(task.repo_root || '');
 			const runningWriters = state.tasks.filter(
 				(t) => t.repo_key === task.repo_key && t.status === 'running' && t.worktree_path
 			).length;
-			const life = lifecycleOf(task, { titles, runningWriters, maxWriters: state.maxWriters });
+			const goneDeps = (state.dependsOn[task.id] ?? []).filter((id) =>
+				['ended', 'failed'].includes(statuses.get(id) ?? '')
+			);
+			const life = lifecycleOf(task, {
+				titles,
+				runningWriters,
+				maxWriters: state.maxWriters,
+				goneDeps
+			});
 			return {
 				task,
 				life,
@@ -214,4 +238,81 @@ export async function openAgentsPanel(folder: string, taskId?: string) {
 	if (get(currentWorkspace)?.path !== path) return;
 	if (taskId) coordinationFocus.set(taskId);
 	openCoordinationTab();
+}
+
+/** Actions the dashboard runs itself; the rest open the chat or the task's page. */
+export const INLINE_ACTIONS = new Set(['start', 'stop', 'resume', 'retry']);
+
+/** Run a task's main action (Start, Stop, Resume, Retry) and refresh. */
+export async function runAgentAction(row: AgentRow): Promise<void> {
+	const id = row.task.id;
+	try {
+		switch (row.life.action) {
+			case 'start':
+				await startCoordTask(id);
+				break;
+			case 'stop':
+				await pauseCoordTask(id);
+				break;
+			case 'resume':
+			case 'retry':
+				await resumeCoordTask(id);
+				break;
+			case 'reply':
+				return openAgentChat(row.task, row.folder);
+			default:
+				return openAgentsPanel(row.folder, id);
+		}
+	} finally {
+		void load();
+	}
+}
+
+/** Send a message in a task's chat, as its next turn (queued if one is running). */
+export async function replyToAgent(task: CoordTask, text: string): Promise<void> {
+	if (!task.chat_id) throw new Error('This task has no chat');
+	const { chat } = await getChat(task.chat_id);
+	const meta = (chat.meta ?? {}) as Record<string, any>;
+	const model = meta.last_model;
+	if (!model) throw new Error('Open the chat once to pick a model first');
+	await sendMessage(
+		text,
+		model,
+		meta.workspace || undefined,
+		task.chat_id,
+		chat.current_message_id,
+		meta.params ?? {}
+	);
+	void load();
+}
+
+/** Statuses a task can be marked done from (a running one is stopped first). */
+export const MARK_DONE_FROM = new Set([
+	'queued',
+	'blocked',
+	'paused',
+	'reviewing',
+	'integration_ready',
+	'failed',
+	'ended',
+	'running'
+]);
+
+/** Ask, then mark a task done so the tasks depending on it can start. */
+export async function markAgentDone(
+	task: CoordTask,
+	t: (key: string, args?: Record<string, unknown>) => string
+): Promise<boolean> {
+	const ok = await requestConfirm({
+		title: t('coordination.markDoneTitle'),
+		message: t('coordination.markDoneMessage', { title: task.title }),
+		confirmLabel: t('coordination.markDone')
+	});
+	if (!ok) return false;
+	try {
+		await markCoordTaskDone(task.id);
+	} finally {
+		void load();
+	}
+	return true;
 }

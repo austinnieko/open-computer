@@ -380,6 +380,7 @@ class SummaryTests(ApiTestCase):
         self.assertEqual(origins["Side"], str(side))
         self.assertIn("max_writers", data["limits"])
         self.assertEqual(data["active_chats"], [])
+        self.assertEqual(data["dependencies"], [])
 
     async def test_usage_adds_per_task_usage_and_conflicts(self):
         task = (await self.post("/tasks", {"root": str(self.repo), "title": "Counted"})).json()

@@ -58,9 +58,7 @@ class CoordinationTestCase(unittest.IsolatedAsyncioTestCase):
         db._engine = None
         db._async_session = None
         cfg = AlembicConfig()
-        cfg.set_main_option(
-            "script_location", str(Path(db.__file__).parent.parent / "migrations")
-        )
+        cfg.set_main_option("script_location", str(Path(db.__file__).parent.parent / "migrations"))
         cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_file}")
         command.upgrade(cfg, "head")
         registry._repo_locks.clear()
@@ -407,7 +405,9 @@ class MultiAgentSimulationTests(CoordinationTestCase):
         def merges_cleanly(a, b) -> bool:
             proc = subprocess.run(
                 ["git", "merge-tree", "--write-tree", a, b],
-                cwd=self.repo, capture_output=True, text=True,
+                cwd=self.repo,
+                capture_output=True,
+                text=True,
             )
             return proc.returncode == 0
 

@@ -9,13 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- 🧭 **Agents dashboard.** A new **Agents** item in the sidebar (under Search) opens one page for every task agent, grouped **repository → folder (main checkout or worktree) → agent**. It shows:
-  - counts at the top: *Needs attention*, *Running*, *Waiting to start*, *In review* and *Finished today*. Click one to filter the list.
-  - total tokens, cost, agent time and tool calls, and open file conflicts.
-  - per agent: state, the reason it's in that state, branch, tokens and time.
-  - search, and repositories or folders you can collapse.
-
-  Click an agent to open its chat in its own folder, use ⓘ for its details on that folder's Agents & tasks page, or **Agents & tasks** to manage a whole folder. The sidebar item shows how many agents are running and how many need you. Task chats get a **← Agents** button back to the dashboard, and Home shows a one-line summary that opens it. Everything updates live from task events, without polling.
+- 🧭 **Agents dashboard.** A new **Agents** item in the sidebar (under Search) opens one page for every task agent. It shows how many agents are running and how many need you.
+  - **Needs you, up top:** agents waiting on an answer or blocked, with the reason. **Answer** / **Fix** jumps to the agent and opens its reply box.
+  - **Overview:** a bar of every agent by state, and cards for *Needs attention*, *Running*, *Waiting*, *In review* and *Finished today*. Click a bar segment or a card to filter. Below them: tokens, cost, agent time and tool calls, open conflicts, and a meter of how many agents are writing code.
+  - **List or board:** the list groups **repository → folder (main checkout or worktree) → agent**, with collapsible groups. The board has one column per state.
+  - **Act in place:** each agent's main action (Start, Stop, Resume, Retry) runs from its row. Expand an agent for its description, last check-out note, usage, branch, folder and dependencies, plus a **quick reply** that goes straight into its chat (Enter to send), **Open chat**, **Details** and **Mark done**.
+  - **Keyboard:** `/` search, `j`/`k` move, `Enter` expand, `o` open chat, `i` details, `1`–`5` filter, `b` list/board, `Esc` clear.
+  - Updates live from task events (no polling). Task chats get a **← Agents** button back here, and Home shows a one-line summary that opens it.
 - 📁 **Tasks stay with the folder they were started from.** In a repository with several worktrees (for example a `shitter-fusion` worktree of `barkyardlabs`), a task's chat is listed in the sidebar under the folder it was started from, and the Agents & tasks list shows that folder's tasks, with **All of <repo>** one click away (each task then shows its folder). The task page shows **Started in**. Older tasks are placed once, by the folder that has their base branch checked out; their chat files are moved there.
 - ⏱️ **Check on agents waiting on background work.** **Settings → Agents → Check on agents waiting on background work every N min** (default 10; 0 turns it off). An agent that checks out *continuing* while nothing Open Computer can see is running (such as an OpenCode reviewer sub-agent) gets one short check-in turn after that time, up to 6 times in a row. It is one timer per task, not polling, and your own reply cancels it.
 - ✂️ **Edit a task's dependencies.** Each row under **Dependencies** on a task's page has a **×** to remove it (from either side, *depends on* or *required by*), and **Add a dependency…** adds one. A task waiting on a dependency it no longer needs gets in line to start as soon as that dependency is removed.
@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ✅ **Mark a task done so the tasks waiting on it start.** **End task** means giving up on a task, so tasks that depend on it are blocked. Its confirmation wrongly said the task "moves to Done". There is now **Mark done**, on the task's page and on the dashboard: use it when the task's work is finished, even if it was merged outside Open Computer. A task that was ended by mistake has **Mark done instead**, and a task blocked by an ended dependency has **Mark <dependency> done**. The blocked task now names the dependency instead of showing *Conflict: dependency_failed*.
+- 🔓 **A blocked task no longer stays blocked by a stale "waiting on".** Once the conflict that blocked a task clears, the task goes back in line, even if it was also waiting on a dependency that has since finished.
 - 📁 **Task chats no longer pop up under the wrong folder.** A task chat left open in another folder (for example BAR-356 under `barkyardlabs` while it belongs to `shitter-fusion`, or an ended task's chat) is no longer pinned to the top of that folder's list. **Open chat** on the Agents page opens a task's chat in the folder it was started from.
 - 💤 **Idle agents no longer look busy or hold a slot.** When a task agent finishes its turn and nothing else is running for it (no sub-agents, no timers), the task shows **Waiting for you** instead of Running and frees its slot, so the next queued task starts. Your next message in its chat continues it.
 - ⏳ **Queued tasks say what they are waiting for.** A task with instructions shows **Waiting for a free slot**, with how many of the slots are in use.

@@ -22,6 +22,7 @@
 		addCoordDependency,
 		removeCoordDependency,
 		deleteCoordTask,
+		markCoordTaskDone,
 		endCoordTask,
 		getCoordTaskDiff,
 		getCoordTaskReadiness,
@@ -187,9 +188,23 @@
 			.length,
 		maxWriters: coord.maxWriters
 	});
-	const lives = $derived(new Map(coord.tasks.map((task) => [task.id, lifecycleOf(task, lifeCtx)])));
+	const goneIds = (task: CoordTask) =>
+		coord.dependencies
+			.filter((d) => d.task_id === task.id)
+			.map((d) => d.depends_on)
+			.filter((id) =>
+				['ended', 'failed'].includes(coord.tasks.find((x) => x.id === id)?.status ?? '')
+			);
+	const lives = $derived(
+		new Map(
+			coord.tasks.map((task) => [
+				task.id,
+				lifecycleOf(task, { ...lifeCtx, goneDeps: goneIds(task) })
+			])
+		)
+	);
 	function life(task: CoordTask): TaskLifecycle {
-		return lives.get(task.id) ?? lifecycleOf(task, lifeCtx);
+		return lives.get(task.id) ?? lifecycleOf(task, { ...lifeCtx, goneDeps: goneIds(task) });
 	}
 	function lifeLabel(l: TaskLifecycle): string {
 		return l.stage === 'active' && l.activity
@@ -444,6 +459,36 @@
 		});
 		if (ok) await run(`end:${task.id}`, () => endCoordTask(task.id), $t('coordination.ended'));
 	}
+
+	const MARK_DONE_FROM = [
+		'queued',
+		'blocked',
+		'paused',
+		'reviewing',
+		'integration_ready',
+		'failed',
+		'ended',
+		'running'
+	];
+	async function markDone(task: CoordTask) {
+		const ok = await requestConfirm({
+			title: $t('coordination.markDoneTitle'),
+			message: $t('coordination.markDoneMessage', { title: task.title }),
+			confirmLabel: $t('coordination.markDone')
+		});
+		if (ok)
+			await run(`done:${task.id}`, () => markCoordTaskDone(task.id), $t('coordination.markedDone'));
+	}
+	/** Dependencies that were ended or failed, which hold this task back. */
+	const goneDeps = (task: CoordTask) =>
+		(task.blockers ?? [])
+			.filter((b) => b.kind === 'dependency_failed' || b.detail === 'dependency_failed')
+			.flatMap((b) => b.tasks ?? [])
+
+			.concat(goneIds(task))
+			.filter((id, i, all) => all.indexOf(id) === i)
+			.map((id) => coord.tasks.find((x) => x.id === id))
+			.filter((x): x is CoordTask => !!x);
 
 	async function deleteTask(task: CoordTask) {
 		const ok = await requestConfirm({
@@ -1002,6 +1047,30 @@
 									<Icon name="xmark" size={13} />{$t('coordination.end')}
 								</button>
 							{/if}
+							{#if MARK_DONE_FROM.includes(task.status) && !task.chat_missing}
+								<button
+									class="btn-secondary"
+									disabled={busy === `done:${task.id}`}
+									onclick={() => markDone(task)}
+									use:tooltip={$t('coordination.markDoneHint')}
+								>
+									<Icon name="check" size={13} />{task.status === 'ended'
+										? $t('coordination.markDoneInstead')
+										: $t('coordination.markDone')}
+								</button>
+							{/if}
+							{#each goneDeps(task) as dep (dep.id)}
+								<button
+									class="btn-secondary"
+									disabled={busy === `done:${dep.id}`}
+									onclick={() => markDone(dep)}
+									use:tooltip={$t('coordination.markDepDoneHint')}
+								>
+									<Icon name="check" size={13} />{$t('coordination.markDepDone', {
+										title: dep.title
+									})}
+								</button>
+							{/each}
 							{#if task.status === 'running'}
 								<button
 									class="btn-secondary"

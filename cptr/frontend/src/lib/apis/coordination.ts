@@ -167,6 +167,7 @@ export interface CoordSummary {
 	tasks: CoordTask[];
 	active_chats: string[];
 	limits: CoordLimits;
+	dependencies: { task_id: string; depends_on: string }[];
 	/** With usage=true: per-task usage and totals. */
 	usage?: { tasks: Record<string, TaskUsage>; totals: TaskUsage };
 	/** With usage=true: open file conflicts per repo_key. */
@@ -249,6 +250,8 @@ export const publishCoordPr = (id: string, draft = false) =>
 		draft
 	});
 export const endCoordTask = (id: string) => taskPost(id, 'end');
+/** Mark a task done by hand (also turns an ended task into a done one). */
+export const markCoordTaskDone = (id: string) => taskPost(id, 'done');
 export const deleteCoordTask = (id: string, removeWorktree: boolean) =>
 	fetchJSON<{ ok: boolean; branch_kept: string | null; worktree_removed: boolean }>(
 		`/api/coordination/tasks/${encodeURIComponent(id)}`,

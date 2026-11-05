@@ -305,7 +305,13 @@ export function checkoutOf(task: CoordTask): TaskCheckout | null {
 
 export function lifecycleOf(
 	task: CoordTask,
-	ctx: { titles: Map<string, string>; runningWriters: number; maxWriters: number }
+	ctx: {
+		titles: Map<string, string>;
+		runningWriters: number;
+		maxWriters: number;
+		/** Ids of tasks this one depends on that were ended or failed. */
+		goneDeps?: string[];
+	}
 ): TaskLifecycle {
 	const blockers = task.blockers ?? [];
 	const names = (ids: string[] = []) => ids.map((id) => ctx.titles.get(id) ?? id).join(', ');
@@ -338,13 +344,21 @@ export function lifecycleOf(
 	if (task.status === 'running') {
 		return { stage: 'active', activity: 'working', detailKey: null, action: 'stop' };
 	}
-	const failedDep = blockers.find((b) => b.kind === 'dependency_failed');
-	if (failedDep) {
+	const failedDep = blockers.find(
+		(b) =>
+			b.kind === 'dependency_failed' || (b.kind === 'conflict' && b.detail === 'dependency_failed')
+	);
+	if (failedDep || ctx.goneDeps?.length) {
 		return {
 			stage: 'active',
 			activity: 'needs_you',
 			detailKey: 'dependencyGone',
-			detailArgs: { tasks: names(failedDep.tasks) || failedDep.detail || '' },
+			detailArgs: {
+				tasks:
+					names(failedDep?.tasks?.length ? failedDep.tasks : ctx.goneDeps) ||
+					(failedDep?.kind === 'dependency_failed' ? failedDep.detail : '') ||
+					'A dependency'
+			},
 			action: null
 		};
 	}

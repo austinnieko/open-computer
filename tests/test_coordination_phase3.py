@@ -17,7 +17,13 @@ from pathlib import Path
 
 from cptr.models import Config
 from cptr.models.chats import Chat
-from cptr.models.coordination import CoordClaim, CoordConflict, CoordIntegration, CoordMessage, CoordTask
+from cptr.models.coordination import (
+    CoordClaim,
+    CoordConflict,
+    CoordIntegration,
+    CoordMessage,
+    CoordTask,
+)
 from cptr.utils import gh
 from cptr.utils.coordination import coordinator, integration, prs, registry, validation
 from cptr.utils.identity import identity_for_user_id
@@ -87,7 +93,9 @@ class ValidationTests(Phase3TestCase):
         self.assertEqual((await validation.validate_task(task["id"]))["status"], "no_tests")
 
     async def test_timeout_kills_command(self):
-        task = await self.task("Slow", test_command=f"{shlex.quote(sys.executable)} -c 'import time; time.sleep(60)'")
+        task = await self.task(
+            "Slow", test_command=f"{shlex.quote(sys.executable)} -c 'import time; time.sleep(60)'"
+        )
         self.write(task, "x.txt", "x\n")
         validation_timeout = validation.timeout_seconds
 
@@ -128,8 +136,9 @@ class IntegrationTests(Phase3TestCase):
         main_before = git(self.repo, "rev-parse", "main")
         a = await self.ready_task("Schema", {"schema.py": "SCHEMA = 1\n"})
         c = await self.ready_task("Readme", {"README.md": "docs\n"})
-        b = await self.ready_task("Uses schema", {"user.py": "from schema import SCHEMA\n"},
-                                  depends_on=[a["id"]])
+        b = await self.ready_task(
+            "Uses schema", {"user.py": "from schema import SCHEMA\n"}, depends_on=[a["id"]]
+        )
         heads = {t["id"]: git(t["worktree_path"], "rev-parse", "HEAD") for t in (a, b, c)}
         run = await self.integrate()
         self.assertEqual(run["status"], "passed", run["summary"])
@@ -141,7 +150,9 @@ class IntegrationTests(Phase3TestCase):
             self.assertEqual(done.validation["integration"]["run_id"], run["id"])
             self.assertEqual(git(t["worktree_path"], "rev-parse", "HEAD"), heads[t["id"]])
         self.assertEqual(git(self.repo, "rev-parse", "main"), main_before)  # never merged into main
-        merges = git(run["worktree_path"], "log", "--merges", "--format=%s", f"{run['base_sha']}..HEAD")
+        merges = git(
+            run["worktree_path"], "log", "--merges", "--format=%s", f"{run['base_sha']}..HEAD"
+        )
         self.assertEqual(len(merges.splitlines()), 3)
         self.assertIn(a["id"], merges)
         self.assertTrue(Path(run["worktree_path"]).is_dir())  # kept for inspection
@@ -154,7 +165,9 @@ class IntegrationTests(Phase3TestCase):
         run = await self.integrate()
         excluded = {s["task_id"]: s for s in run["steps"] if s["result"] == "excluded"}
         self.assertEqual(set(excluded), {a["id"], b["id"]})
-        self.assertIn("unresolved confirmed conflict (merge_conflict)", excluded[a["id"]]["reasons"])
+        self.assertIn(
+            "unresolved confirmed conflict (merge_conflict)", excluded[a["id"]]["reasons"]
+        )
         self.assertEqual(run["status"], "failed")
 
     async def test_merge_conflict_during_integration_requests_correction(self):
@@ -173,7 +186,9 @@ class IntegrationTests(Phase3TestCase):
         self.assertEqual(steps[b["id"]]["with"], [a["id"]])
         self.assertEqual(steps[d["id"]]["result"], "skipped")
         blocked = await CoordTask.get_by_id(b["id"])
-        self.assertEqual((blocked.status, blocked.blockers[0]["kind"]), ("blocked", "needs_correction"))
+        self.assertEqual(
+            (blocked.status, blocked.blockers[0]["kind"]), ("blocked", "needs_correction")
+        )
         self.assertEqual((await CoordTask.get_by_id(a["id"])).status, "integration_ready")
         self.assertEqual((await CoordTask.get_by_id(d["id"])).status, "reviewing")
         notes = await CoordMessage.pending_for(b["id"])
@@ -191,7 +206,9 @@ class IntegrationTests(Phase3TestCase):
         b = await self.ready_task("Breaks combined", {"extra.py": "x = 1\n"})
         c = await self.ready_task("Fine last", {"two.py": "B = 1\n"})
         # B passes alone, but adds a hook that only fails once A's file exists too.
-        self.write(b, "shared.py", "import os\nVALUE = 1\nEXTRA = -1 if os.path.exists('one.py') else 0\n")
+        self.write(
+            b, "shared.py", "import os\nVALUE = 1\nEXTRA = -1 if os.path.exists('one.py') else 0\n"
+        )
         await validation.validate_task(b["id"])
         run = await self.integrate()
         self.assertEqual(run["status"], "failed")
@@ -263,9 +280,14 @@ class PrTests(Phase3TestCase):
             if args[:2] == ["pr", "create"]:
                 head = args[args.index("--head") + 1]
                 number = len(self.prs) + 1
-                self.prs[head] = {"number": number, "url": f"https://example.test/pr/{number}",
-                                  "state": "OPEN", "isDraft": False, "headRefName": head,
-                                  "baseRefName": args[args.index("--base") + 1]}
+                self.prs[head] = {
+                    "number": number,
+                    "url": f"https://example.test/pr/{number}",
+                    "state": "OPEN",
+                    "isDraft": False,
+                    "headRefName": head,
+                    "baseRefName": args[args.index("--base") + 1],
+                }
                 self.last_body = args[args.index("--body") + 1]
                 return 0, self.prs[head]["url"] + "\n", ""
             if args[:2] == ["pr", "view"]:
@@ -327,8 +349,10 @@ class PrTests(Phase3TestCase):
         task = await self.integrated("Never merged")
         await prs.ensure_pr(task["id"], identity=self.identity, user_confirmed=True)
         self.assertFalse(any(c[:2] == ["pr", "merge"] for c in self.gh_calls))
-        self.assertNotEqual(git(self.tmp / "origin.git", "rev-parse", "main"),
-                            git(self.tmp / "origin.git", "rev-parse", task["branch"]))
+        self.assertNotEqual(
+            git(self.tmp / "origin.git", "rev-parse", "main"),
+            git(self.tmp / "origin.git", "rev-parse", task["branch"]),
+        )
 
     def test_no_merge_code_path_in_coordination_package(self):
         package = Path(prs.__file__).parent

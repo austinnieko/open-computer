@@ -109,7 +109,8 @@ async def _unblock(row: CoordConflict, active_chats: set[str]) -> list[dict]:
         if blockers == (task.blockers or []):
             continue
         fields: dict[str, Any] = {"blockers": blockers}
-        if task.status == "blocked" and not blockers:
+        # Only conflicts block; "waiting on" dependencies is a queued task's normal state.
+        if task.status == "blocked" and not [b for b in blockers if b.get("kind") != "waiting_on"]:
             meta = dict(task.meta or {})
             previous = meta.pop("status_before_block", "paused")
             if previous == "running" and task.chat_id not in active_chats:

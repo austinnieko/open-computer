@@ -307,10 +307,14 @@ async def summary(request: Request, usage: bool = False):
         row = t.to_dict()
         row["chat_missing"] = bool(t.chat_id) and t.chat_id not in existing
         rows.append(row)
+    deps = []
+    for key in {t.repo_key for t in tasks}:
+        deps += [{"task_id": a, "depends_on": b} for a, b in await CoordTaskDep.all_for_repo(key)]
     result = {
         "tasks": rows,
         "active_chats": sorted(c for c in chat_ids if c in active),
         "limits": await _limits_dict(),
+        "dependencies": deps,
     }
     if usage:
         totals = dict.fromkeys(USAGE_KEYS, 0)
@@ -421,6 +425,26 @@ async def end_task(request: Request, task_id: str):
     await _emit(task.user_id, result)
     coordinator.request_refresh(task.repo_key)
     return {"task": result, "stopped_turns": stopped}
+
+
+@router.post("/tasks/{task_id}/done")
+async def mark_task_done(request: Request, task_id: str):
+    """Mark the task done by hand (its work is finished or landed elsewhere), so
+    tasks that depend on it start. Also turns an ended task into a done one."""
+    task = await _own_task(request, task_id)
+    if task.status == "running":
+        await _stop_turns(task)
+        try:
+            await registry.set_status(task.id, "paused", reason="stopped to mark done")
+        except registry.CoordinationError:
+            pass
+    try:
+        result = await registry.mark_done(task.id)
+    except registry.CoordinationError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await _emit(task.user_id, result)
+    coordinator.request_refresh(task.repo_key)
+    return {"task": result}
 
 
 @router.delete("/tasks/{task_id}")

@@ -345,6 +345,40 @@ async def set_status(
     return (await CoordTask.get_by_id(task_id)).to_dict()
 
 
+# Where the user may mark a task done by hand: its work is finished (or landed
+# some other way, such as a PR merged outside Open Computer), so tasks that
+# depend on it can go ahead. Includes "ended", to undo an End meant as "done".
+MARK_DONE_FROM = {
+    "queued",
+    "blocked",
+    "paused",
+    "reviewing",
+    "integration_ready",
+    "failed",
+    "ended",
+}
+
+
+async def mark_done(task_id: str) -> dict[str, Any]:
+    """Mark a task completed by the user, outside the agent-driven transitions."""
+    task = await CoordTask.get_by_id(task_id)
+    if not task:
+        raise CoordinationError(f"Unknown task {task_id}")
+    if task.status == "completed":
+        return task.to_dict()
+    if task.status not in MARK_DONE_FROM:
+        raise CoordinationError(f"{task_id} is {task.status}; stop it before marking it done")
+    meta = _milestone(dict(task.meta or {}), "completed", by="user", previous=task.status)
+    meta["status_reason"] = "marked done by user"
+    for key in ("start", "waiting_for_user", "checkin_due"):
+        meta.pop(key, None)
+    if not await CoordTask.update_fields(
+        task_id, expect_status=task.status, status="completed", blockers=[], meta=meta
+    ):
+        raise CoordinationError(f"{task_id} changed concurrently; retry")
+    return (await CoordTask.get_by_id(task_id)).to_dict()
+
+
 async def record_session(task_id: str, *, agent: str | None, session_id: str | None) -> None:
     """Persist the agent session that is working on a task (for recovery)."""
     task = await CoordTask.get_by_id(task_id)
