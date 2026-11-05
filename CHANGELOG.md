@@ -41,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 📱 **The iPhone app no longer goes stale after you switch away.**
+  - **Reconnects when you come back:** iOS suspends a home-screen app, and its live connection can die without the app knowing, so for up to ~45 seconds nothing updated. Now, coming back after more than 3 seconds (or when the network returns), Open Computer reconnects right away and every view reloads: the open chat, the sidebar's chat lists, Agents and Agents & tasks.
+  - **Picks up new versions without closing it:** it checks for a new version when you come back (at most every 10 minutes) and every 30 minutes while open, instead of only at launch.
 - 🏎️ **Smoother moving between pages.**
   - **Usage is counted once per chat:** the Agents dashboard and Agents & tasks no longer re-read every message of every task and sub-agent chat each time they refresh. A chat is only re-read after it changes, and a running turn always shows live numbers. Sub-agent chats are found with one lookup instead of one full scan per task.
   - **Folders come back instantly:** a folder's Agents & tasks data is kept for 10 minutes after you leave it (was 30 seconds) and refreshes when you return. Folders you aren't looking at no longer refetch on every task event.

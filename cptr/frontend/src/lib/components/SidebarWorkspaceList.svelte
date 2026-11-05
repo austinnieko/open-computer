@@ -510,7 +510,21 @@
 			});
 		}
 
-		unbindSocketListener = socketStore.on('events:chat', handleChatEvent);
+		const offChat = socketStore.on('events:chat', handleChatEvent);
+		// Back from a dropped connection (say the phone suspended the app):
+		// events were missed, so reload the chat lists that are showing.
+		let firstConnect = socketStore.connected;
+		const offConnect = socketStore.on('connect', () => {
+			if (!firstConnect) {
+				firstConnect = true;
+				return; // the initial load already fetched them
+			}
+			for (const path of expandedWorkspaces) reloadWorkspaceChats(path);
+		});
+		unbindSocketListener = () => {
+			offChat();
+			offConnect();
+		};
 	});
 
 	onDestroy(() => {

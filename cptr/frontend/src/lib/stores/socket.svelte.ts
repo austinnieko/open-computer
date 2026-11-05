@@ -48,6 +48,18 @@ function disconnect() {
 	_connected = false;
 }
 
+/**
+ * Drop the connection and open a fresh one. After a phone suspends the app,
+ * the old socket can look connected while it is dead (Socket.IO only notices
+ * after its ping timeout, up to ~45s), so no events arrive and the app looks
+ * frozen. Reconnecting fires 'connect' again, which every store uses to refetch.
+ */
+function reconnect() {
+	if (!socket) return;
+	socket.disconnect();
+	socket.connect();
+}
+
 /** Get the raw socket instance for registering listeners. */
 function getSocket(): Socket | null {
 	return socket;
@@ -79,6 +91,7 @@ function off(event: string, handler: SocketHandler) {
 export const socketStore = {
 	connect,
 	disconnect,
+	reconnect,
 	getSocket,
 	on,
 	off,
