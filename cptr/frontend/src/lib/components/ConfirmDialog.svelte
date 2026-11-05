@@ -55,7 +55,7 @@
 				</p>
 			</div>
 
-			<div class="mt-4 flex justify-end gap-2">
+			<div class="mt-4 flex flex-wrap justify-end gap-2">
 				<button
 					class="app-muted app-interactive h-7 rounded-lg px-3 text-xs font-medium transition-colors duration-75"
 					type="button"
@@ -63,6 +63,17 @@
 				>
 					{$confirmDialog.cancelLabel}
 				</button>
+				{#if $confirmDialog.altLabel}
+					<button
+						class="h-7 rounded-lg border px-3 text-xs font-medium transition-colors duration-75 {$confirmDialog.altDanger
+							? 'border-red-500/30 text-red-600 hover:bg-red-500/10 dark:text-red-400'
+							: 'app-interactive border-gray-200 dark:border-white/10'}"
+						type="button"
+						onclick={() => settleConfirm('alt')}
+					>
+						{$confirmDialog.altLabel}
+					</button>
+				{/if}
 				<button
 					bind:this={confirmButton}
 					class="h-7 rounded-lg bg-gray-900 px-3 text-xs font-medium text-white transition-colors duration-75 hover:bg-gray-800 dark:bg-white dark:text-black dark:hover:bg-white/90"
