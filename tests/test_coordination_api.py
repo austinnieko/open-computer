@@ -348,3 +348,35 @@ class OriginFolderTests(ApiTestCase):
         self.assertEqual((await Chat.get_by_id(task["chat_id"])).meta["workspace"], str(self.side))
         self.assertTrue(self._file(self.side, task["chat_id"]).exists())
         self.assertFalse(self._file(self.repo, task["chat_id"]).exists())
+
+
+class SummaryTests(ApiTestCase):
+    """Home's summary lists task agents from every folder of every repository."""
+
+    async def test_lists_tasks_from_every_folder_and_drops_old_finished_ones(self):
+        import os
+
+        from sqlalchemy import update
+
+        from cptr.models.coordination import CoordTask
+        from cptr.utils.db import get_db
+
+        side = Path(os.path.realpath(self.repo.parent / "side-folder"))
+        git(self.repo, "worktree", "add", "-q", "-b", "side", str(side))
+        await self.post("/tasks", {"root": str(self.repo), "title": "Here"})
+        await self.post("/tasks", {"root": str(side), "title": "Side"})
+        old = (await self.post("/tasks", {"root": str(self.repo), "title": "Old"})).json()
+        async with await get_db() as db:  # ended long ago
+            await db.execute(
+                update(CoordTask)
+                .where(CoordTask.id == old["task"]["id"])
+                .values(status="ended", updated_at=1)
+            )
+            await db.commit()
+
+        data = (await self.client.get("/api/coordination/summary")).json()
+        origins = {t["title"]: t["meta"]["origin_root"] for t in data["tasks"]}
+        self.assertEqual(sorted(origins), ["Here", "Side"])
+        self.assertEqual(origins["Side"], str(side))
+        self.assertIn("max_writers", data["limits"])
+        self.assertEqual(data["active_chats"], [])

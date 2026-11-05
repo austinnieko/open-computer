@@ -280,6 +280,39 @@ async def list_tasks(request: Request, root: str):
     }
 
 
+# Finished tasks drop off Home's summary after this long.
+SUMMARY_RECENT_MS = 24 * 60 * 60 * 1000
+
+
+@router.get("/summary")
+async def summary(request: Request):
+    """Every task agent of this user across all repositories, for Home: tasks
+    still in progress, plus ones that finished in the last day."""
+    from cptr.utils.chat_task import get_active_chat_ids
+    from cptr.utils.config import now_ms
+
+    user_id = _user_id(request)
+    cutoff = now_ms() - SUMMARY_RECENT_MS
+    tasks = [
+        t
+        for t in await CoordTask.query(user_id=user_id)
+        if t.status not in {"completed", "ended"} or (t.updated_at or 0) >= cutoff
+    ]
+    chat_ids = [t.chat_id for t in tasks if t.chat_id]
+    existing = {c.id for c in await Chat.get_by_ids(chat_ids)} if chat_ids else set()
+    active = get_active_chat_ids()
+    rows = []
+    for t in tasks:
+        row = t.to_dict()
+        row["chat_missing"] = bool(t.chat_id) and t.chat_id not in existing
+        rows.append(row)
+    return {
+        "tasks": rows,
+        "active_chats": sorted(c for c in chat_ids if c in active),
+        "limits": await _limits_dict(),
+    }
+
+
 @router.get("/tasks/{task_id}/diff")
 async def task_diff(request: Request, task_id: str):
     """Everything the task changed relative to its base: commits plus uncommitted edits."""

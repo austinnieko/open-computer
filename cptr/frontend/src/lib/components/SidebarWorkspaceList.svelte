@@ -147,6 +147,15 @@
 			: { letter: 'C', tone: 'neutral', label: 'Chat' };
 	}
 	const isDraftId = (id: string) => id.startsWith('new-') || id.startsWith('pending-');
+	// A task chat left open here that belongs to another folder (the one its task
+	// started from): listed there, not pinned on top of this one.
+	function belongsElsewhere(chatId: string): boolean {
+		const task = taskByChat.get(chatId);
+		const origin = String(task?.meta?.origin_root ?? '').replace(/\/+$/, '');
+		if (!origin || !currentPath) return false;
+		const here = (coordinationOf(currentPath).viewRoot || currentPath).replace(/\/+$/, '');
+		return origin !== here;
+	}
 	const openChatIds = $derived(new Set(openChats.map((o) => o.chat.id)));
 
 	function closeOpenChat(o: OpenChat) {
@@ -633,7 +642,11 @@
 						     list yet (new chats, older pages) go on top. -->
 						{#if ws.path === currentPath}
 							{@const listedIds = new Set((chats ?? []).map((c) => c.id))}
-							{@const unlisted = openChats.filter((o) => !listedIds.has(o.chat.id))}
+							{@const unlisted = openChats.filter(
+								(o) =>
+									!listedIds.has(o.chat.id) &&
+									(o.chat.id === currentChatId || !belongsElsewhere(o.chat.id))
+							)}
 							{#each unlisted as o (o.chat.id)}
 								{@render chatRow(o.chat, ws.path, o)}
 							{/each}

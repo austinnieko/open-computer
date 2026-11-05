@@ -46,6 +46,7 @@
 	import BrowserPreview from '$lib/components/BrowserPreview.svelte';
 	import CoordinationPanel from '$lib/components/CoordinationPanel.svelte';
 	import ChatPanel from '$lib/components/chat/ChatPanel.svelte';
+	import HomeAgents from '$lib/components/chat/HomeAgents.svelte';
 	import DirectoryPicker from '$lib/components/DirectoryPicker.svelte';
 	import GroupTabBar from '$lib/components/GroupTabBar.svelte';
 	import Icon from '$lib/components/Icon.svelte';
@@ -1132,6 +1133,8 @@
 									</button>
 								{/if}
 							</div>
+
+							<HomeAgents compact />
 
 							{#if continuation}
 								{@const unreadCount =

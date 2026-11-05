@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 🏠 **Agents on Home.** Home lists your task agents from every folder and repository, most urgent first (*Needs you*, *Blocked*, *Working*, *Background work*, *In line*…), with counts per state and each task's folder and branch. Click one to open its chat in its own folder. Finished tasks drop off after a day. It updates live from task events (no polling).
 - 📁 **Tasks stay with the folder they were started from.** In a repository with several worktrees (for example a `shitter-fusion` worktree of `barkyardlabs`), a task's chat is listed in the sidebar under the folder it was started from, and the Agents & tasks list shows that folder's tasks, with **All of <repo>** one click away (each task then shows its folder). The task page shows **Started in**. Older tasks are placed once, by the folder that has their base branch checked out; their chat files are moved there.
 - ⏱️ **Check on agents waiting on background work.** **Settings → Agents → Check on agents waiting on background work every N min** (default 10; 0 turns it off). An agent that checks out *continuing* while nothing Open Computer can see is running (such as an OpenCode reviewer sub-agent) gets one short check-in turn after that time, up to 6 times in a row. It is one timer per task, not polling, and your own reply cancels it.
 - ✂️ **Edit a task's dependencies.** Each row under **Dependencies** on a task's page has a **×** to remove it (from either side, *depends on* or *required by*), and **Add a dependency…** adds one. A task waiting on a dependency it no longer needs gets in line to start as soon as that dependency is removed.
@@ -27,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 📁 **Task chats no longer pop up under the wrong folder.** A task chat left open in another folder (for example BAR-356 under `barkyardlabs` while it belongs to `shitter-fusion`, or an ended task's chat) is no longer pinned to the top of that folder's list. **Open chat** on the Agents page opens a task's chat in the folder it was started from.
 - 💤 **Idle agents no longer look busy or hold a slot.** When a task agent finishes its turn and nothing else is running for it (no sub-agents, no timers), the task shows **Waiting for you** instead of Running and frees its slot, so the next queued task starts. Your next message in its chat continues it.
 - ⏳ **Queued tasks say what they are waiting for.** A task with instructions shows **Waiting for a free slot**, with how many of the slots are in use.
 - 🧾 **View diff no longer freezes on large changes.** It lists the changed files with their line counts and shows a file's lines when you open it; small diffs still open fully.

@@ -14,7 +14,7 @@
 	import Spinner from './common/Spinner.svelte';
 	import ModelSelector from './common/ModelSelector.svelte';
 	import DiffHunkList from './DiffHunkList.svelte';
-	import { addWorkspace, openChatTab } from '$lib/stores';
+	import { addWorkspace, openChatTab, workspaceList } from '$lib/stores';
 	import { requestConfirm } from '$lib/stores/confirm';
 	import { chatModels, defaultModel } from '$lib/stores/chat';
 	import { getGitBranches } from '$lib/apis/git';
@@ -231,7 +231,7 @@
 			case 'stop':
 				return run(`pause:${task.id}`, () => pauseCoordTask(task.id));
 			case 'reply':
-				if (task.chat_id) openChatTab(task.chat_id);
+				if (task.chat_id) openTaskChat(task);
 				return;
 			case 'review':
 				if (diffFor !== task.id) await loadDiff(task);
@@ -397,6 +397,19 @@
 
 	async function checkReadiness(task: CoordTask) {
 		readiness = await getCoordTaskReadiness(task.id).catch(() => null);
+	}
+
+	/** Open a task's chat in the folder the task started from, so it stays listed
+	 * there in the sidebar instead of under whichever folder is open now. */
+	function openTaskChat(task: CoordTask) {
+		if (!task.chat_id) return;
+		const origin = originOf(task);
+		if (!origin || origin === viewRoot) return openChatTab(task.chat_id);
+		const ws = $workspaceList.find((w) => norm(w.path) === origin);
+		if (!ws) addWorkspace(origin);
+		goto(
+			`/?workspace=${encodeURIComponent(ws?.path ?? origin)}&chatId=${encodeURIComponent(task.chat_id)}`
+		);
 	}
 
 	async function openWorktree(task: CoordTask) {
@@ -956,7 +969,7 @@
 						<!-- Actions -->
 						<div class="flex flex-wrap gap-1.5">
 							{#if task.chat_id && !task.chat_missing}
-								<button class="btn-secondary" onclick={() => openChatTab(task.chat_id!)}>
+								<button class="btn-secondary" onclick={() => openTaskChat(task)}>
 									<Icon name="chat-bubble" size={13} />{$t('coordination.openChat')}
 								</button>
 							{/if}

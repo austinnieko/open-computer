@@ -162,6 +162,15 @@ export const setCoordLimits = (body: { max_writers?: number; checkin_minutes?: n
 		body: JSON.stringify(body)
 	});
 
+/** All of this user's task agents across repositories (Home's summary). */
+export interface CoordSummary {
+	tasks: CoordTask[];
+	active_chats: string[];
+	limits: CoordLimits;
+}
+
+export const getCoordSummary = () => fetchJSON<CoordSummary>('/api/coordination/summary');
+
 export const getCoordTasks = (root: string) =>
 	fetchJSON<TaskListResponse>(`/api/coordination/tasks?${q(root)}`);
 
