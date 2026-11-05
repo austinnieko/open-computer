@@ -9,7 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- 🏠 **Agents on Home.** Home lists your task agents from every folder and repository, most urgent first (*Needs you*, *Blocked*, *Working*, *Background work*, *In line*…), with counts per state and each task's folder and branch. Click one to open its chat in its own folder. Finished tasks drop off after a day. It updates live from task events (no polling).
+- 🧭 **Agents dashboard.** A new **Agents** item in the sidebar (under Search) opens one page for every task agent, grouped **repository → folder (main checkout or worktree) → agent**. It shows:
+  - counts at the top: *Needs attention*, *Running*, *Waiting to start*, *In review* and *Finished today*. Click one to filter the list.
+  - total tokens, cost, agent time and tool calls, and open file conflicts.
+  - per agent: state, the reason it's in that state, branch, tokens and time.
+  - search, and repositories or folders you can collapse.
+
+  Click an agent to open its chat in its own folder, use ⓘ for its details on that folder's Agents & tasks page, or **Agents & tasks** to manage a whole folder. The sidebar item shows how many agents are running and how many need you. Task chats get a **← Agents** button back to the dashboard, and Home shows a one-line summary that opens it. Everything updates live from task events, without polling.
 - 📁 **Tasks stay with the folder they were started from.** In a repository with several worktrees (for example a `shitter-fusion` worktree of `barkyardlabs`), a task's chat is listed in the sidebar under the folder it was started from, and the Agents & tasks list shows that folder's tasks, with **All of <repo>** one click away (each task then shows its folder). The task page shows **Started in**. Older tasks are placed once, by the folder that has their base branch checked out; their chat files are moved there.
 - ⏱️ **Check on agents waiting on background work.** **Settings → Agents → Check on agents waiting on background work every N min** (default 10; 0 turns it off). An agent that checks out *continuing* while nothing Open Computer can see is running (such as an OpenCode reviewer sub-agent) gets one short check-in turn after that time, up to 6 times in a row. It is one timer per task, not polling, and your own reply cancels it.
 - ✂️ **Edit a task's dependencies.** Each row under **Dependencies** on a task's page has a **×** to remove it (from either side, *depends on* or *required by*), and **Add a dependency…** adds one. A task waiting on a dependency it no longer needs gets in line to start as soon as that dependency is removed.

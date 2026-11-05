@@ -380,3 +380,14 @@ class SummaryTests(ApiTestCase):
         self.assertEqual(origins["Side"], str(side))
         self.assertIn("max_writers", data["limits"])
         self.assertEqual(data["active_chats"], [])
+
+    async def test_usage_adds_per_task_usage_and_conflicts(self):
+        task = (await self.post("/tasks", {"root": str(self.repo), "title": "Counted"})).json()
+        plain = (await self.client.get("/api/coordination/summary")).json()
+        self.assertNotIn("usage", plain)
+        data = (await self.client.get("/api/coordination/summary?usage=true")).json()
+        tid = task["task"]["id"]
+        self.assertEqual(set(data["usage"]["tasks"]), {tid})
+        self.assertEqual(data["usage"]["tasks"][tid]["tokens"], 0)
+        self.assertEqual(data["usage"]["totals"]["turns"], 0)
+        self.assertEqual(data["conflicts"], {task["task"]["repo_key"]: 0})

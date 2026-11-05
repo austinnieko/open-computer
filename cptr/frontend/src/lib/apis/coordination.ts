@@ -167,9 +167,14 @@ export interface CoordSummary {
 	tasks: CoordTask[];
 	active_chats: string[];
 	limits: CoordLimits;
+	/** With usage=true: per-task usage and totals. */
+	usage?: { tasks: Record<string, TaskUsage>; totals: TaskUsage };
+	/** With usage=true: open file conflicts per repo_key. */
+	conflicts?: Record<string, number>;
 }
 
-export const getCoordSummary = () => fetchJSON<CoordSummary>('/api/coordination/summary');
+export const getCoordSummary = (usage = false) =>
+	fetchJSON<CoordSummary>(`/api/coordination/summary${usage ? '?usage=true' : ''}`);
 
 export const getCoordTasks = (root: string) =>
 	fetchJSON<TaskListResponse>(`/api/coordination/tasks?${q(root)}`);

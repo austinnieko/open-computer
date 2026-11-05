@@ -285,9 +285,10 @@ SUMMARY_RECENT_MS = 24 * 60 * 60 * 1000
 
 
 @router.get("/summary")
-async def summary(request: Request):
-    """Every task agent of this user across all repositories, for Home: tasks
-    still in progress, plus ones that finished in the last day."""
+async def summary(request: Request, usage: bool = False):
+    """Every task agent of this user across all repositories (the Agents
+    dashboard): tasks still in progress, plus ones that finished in the last
+    day. ``usage=true`` adds per-task usage and open conflicts per repository."""
     from cptr.utils.chat_task import get_active_chat_ids
     from cptr.utils.config import now_ms
 
@@ -306,11 +307,24 @@ async def summary(request: Request):
         row = t.to_dict()
         row["chat_missing"] = bool(t.chat_id) and t.chat_id not in existing
         rows.append(row)
-    return {
+    result = {
         "tasks": rows,
         "active_chats": sorted(c for c in chat_ids if c in active),
         "limits": await _limits_dict(),
     }
+    if usage:
+        totals = dict.fromkeys(USAGE_KEYS, 0)
+        per_task = {}
+        for t in tasks:
+            per_task[t.id] = await _task_usage(t)
+            _add_usage(totals, per_task[t.id])
+        result["usage"] = {"tasks": per_task, "totals": totals}
+        # Open file conflicts per repository, for the dashboard's attention count.
+        result["conflicts"] = {
+            key: len(await CoordConflict.query(key, statuses={"open", "acknowledged"}))
+            for key in {t.repo_key for t in tasks}
+        }
+    return result
 
 
 @router.get("/tasks/{task_id}/diff")
@@ -671,43 +685,53 @@ async def remove_dependency(request: Request, task_id: str, depends_on: str):
     return {"removed": removed}
 
 
+USAGE_KEYS = ("tokens", "cost_usd", "duration_ms", "tool_calls", "turns", "files")
+
+
+async def _task_usage(task: CoordTask) -> dict:
+    """Tokens, cost, working time, tool calls, turns and files of one task, from
+    its chat and its sub-agent chats."""
+    from cptr.models.chats import ChatMessage
+    from cptr.routers.chat import _tally_messages
+
+    usage = dict.fromkeys(USAGE_KEYS, 0)
+    # Declared files plus the ones Git shows changed in its worktree.
+    usage["files"] = len(set(task.files or []) | set((task.meta or {}).get("observed_files") or []))
+    if task.chat_id:
+        chat_ids = [task.chat_id] + [
+            c.id
+            for c in await Chat.get_internal_descendants(task.chat_id)
+            if (c.meta or {}).get("type") == "subagent"
+        ]
+        for chat_id in chat_ids:
+            stats = _tally_messages(await ChatMessage.get_all_by_chat(chat_id))
+            usage["tokens"] += stats["totals"]["total"]
+            usage["cost_usd"] += stats["totals"]["cost_usd"]
+            usage["duration_ms"] += stats["totals"]["duration_ms"]
+            usage["tool_calls"] += sum(t["count"] for t in stats["tools"])
+            if chat_id == task.chat_id:
+                usage["turns"] = len(stats["turns"])
+    usage["cost_usd"] = round(usage["cost_usd"], 6)
+    return usage
+
+
+def _add_usage(totals: dict, usage: dict) -> None:
+    for key in USAGE_KEYS:
+        totals[key] += usage[key]
+    totals["cost_usd"] = round(totals["cost_usd"], 6)
+
+
 @router.get("/usage")
 async def list_usage(request: Request, root: str):
     """Per-task agent usage (tokens, cost, working time, tool calls, turns, files)
     plus repository totals, from each task chat and its sub-agent chats."""
-    from cptr.models.chats import ChatMessage
-    from cptr.routers.chat import _tally_messages
-
     repo_key = await _repo_key(request, root)
     tasks = await CoordTask.query(user_id=_user_id(request), repo_key=repo_key)
-    keys = ("tokens", "cost_usd", "duration_ms", "tool_calls", "turns", "files")
-    totals = dict.fromkeys(keys, 0)
+    totals = dict.fromkeys(USAGE_KEYS, 0)
     per_task: dict[str, dict] = {}
     for task in tasks:
-        usage = dict.fromkeys(keys, 0)
-        # Declared files plus the ones Git shows changed in its worktree.
-        usage["files"] = len(
-            set(task.files or []) | set((task.meta or {}).get("observed_files") or [])
-        )
-        if task.chat_id:
-            chat_ids = [task.chat_id] + [
-                c.id
-                for c in await Chat.get_internal_descendants(task.chat_id)
-                if (c.meta or {}).get("type") == "subagent"
-            ]
-            for chat_id in chat_ids:
-                stats = _tally_messages(await ChatMessage.get_all_by_chat(chat_id))
-                usage["tokens"] += stats["totals"]["total"]
-                usage["cost_usd"] += stats["totals"]["cost_usd"]
-                usage["duration_ms"] += stats["totals"]["duration_ms"]
-                usage["tool_calls"] += sum(t["count"] for t in stats["tools"])
-                if chat_id == task.chat_id:
-                    usage["turns"] = len(stats["turns"])
-        usage["cost_usd"] = round(usage["cost_usd"], 6)
-        per_task[task.id] = usage
-        for key in keys:
-            totals[key] += usage[key]
-    totals["cost_usd"] = round(totals["cost_usd"], 6)
+        per_task[task.id] = await _task_usage(task)
+        _add_usage(totals, per_task[task.id])
     return {"tasks": per_task, "totals": totals}
 
 
