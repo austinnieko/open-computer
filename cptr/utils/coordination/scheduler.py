@@ -144,14 +144,37 @@ async def schedule(repo_key: str) -> list[str]:
         readers = sum(1 for t in tasks if t.status == "running" and not t.worktree_path)
 
         for task in tasks:
-            if task.status != "queued":
+            if task.status not in {"queued", "blocked"}:
                 continue
             waiting = [
                 d for d in deps.get(task.id, []) if by_id.get(d) and by_id[d].status not in READY
             ]
             others = [b for b in (task.blockers or []) if b.get("kind") != "waiting_on"]
             blockers = others + ([_waiting_blocker(waiting)] if waiting else [])
-            if blockers != (task.blockers or []):
+            if task.status == "blocked":
+                # "Blocked" is for conflicts. Once none is left, the task goes back
+                # to what it was (normally queued), keeping any "waiting on" its
+                # dependencies; this also clears a stale one (say a dependency
+                # that was ended and then marked done).
+                if others:
+                    continue
+                meta = dict(task.meta or {})
+                previous = meta.pop("status_before_block", "queued")
+                if previous != "queued":
+                    await CoordTask.update_fields(
+                        task.id,
+                        expect_status="blocked",
+                        status=previous if previous in {"paused", "reviewing"} else "paused",
+                        blockers=[],
+                        meta=meta,
+                    )
+                    continue
+                if not await CoordTask.update_fields(
+                    task.id, expect_status="blocked", status="queued", blockers=blockers, meta=meta
+                ):
+                    continue
+                task = await CoordTask.get_by_id(task.id)
+            elif blockers != (task.blockers or []):
                 await CoordTask.update_fields(task.id, blockers=blockers)
             if waiting or others:
                 continue

@@ -260,3 +260,44 @@ class CheckinSettingTests(ApiTestCase):
         self.assertEqual(bad.status_code, 422)
         listed = (await self.client.get(f"/api/coordination/tasks?root={self.repo}")).json()
         self.assertEqual(listed["limits"]["checkin_minutes"], 25)
+
+
+class MarkDoneTests(SettledTestCase):
+    async def test_marking_an_ended_dependency_done_lets_the_dependent_start(self):
+        from cptr.utils.coordination import registry
+
+        a = await self.task("Schema")
+        b_chat = await Chat.create(USER, "B", meta={"last_model": "m"})
+        b = await self.task("Use it", chat_id=b_chat.id, start_prompt="go", depends_on=[a["id"]])
+        await coordinator.refresh(a["repo_key"])  # B is in line, waiting on A
+        self.assertIn("waiting_on", str((await CoordTask.get_by_id(b["id"])).blockers))
+        # Ending the dependency (meant as "done") blocks the dependent.
+        await registry.set_status(a["id"], "ended", reason="ended by user")
+        await coordinator.refresh(a["repo_key"])
+        blocked = await CoordTask.get_by_id(b["id"])
+        self.assertNotIn(b["id"], [t for t, _ in self.launched])
+        self.assertIn("dependency_failed", str(blocked.blockers))
+
+        # As it happens in the app: the dependent is blocked and also waiting on A.
+        self.assertIn("waiting_on", str(blocked.blockers))
+        self.assertEqual(blocked.status, "blocked")
+
+        done = await registry.mark_done(a["id"])
+        self.assertEqual(done["status"], "completed")
+        self.assertEqual(done["meta"]["milestones"]["completed"]["previous"], "ended")
+        await coordinator.refresh(a["repo_key"])
+        await coordinator.wait_idle()
+        self.assertIn(b["id"], [t for t, _ in self.launched])
+        b_task = await CoordTask.get_by_id(b["id"])
+        self.assertEqual(b_task.status, "running")
+        self.assertEqual(b_task.blockers, [])
+
+    async def test_a_running_task_must_be_stopped_first(self):
+        from cptr.utils.coordination import registry
+
+        chat = await Chat.create(USER, "R", meta={"last_model": "m"})
+        task = await self.task("Busy", chat_id=chat.id, start_prompt="go")
+        await coordinator.refresh(task["repo_key"])
+        self.assertEqual((await CoordTask.get_by_id(task["id"])).status, "running")
+        with self.assertRaises(registry.CoordinationError):
+            await registry.mark_done(task["id"])

@@ -11,6 +11,7 @@
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import { coordinationFocus, displayStatus } from '$lib/stores/coordination.svelte';
 	import { openCoordinationTab } from '$lib/stores';
+	import { goto } from '$app/navigation';
 
 	interface Props {
 		taskId: string;
@@ -78,6 +79,15 @@
 </script>
 
 {#if task}
+	<button
+		type="button"
+		class="flex shrink-0 items-center gap-1 rounded-md px-1 py-0.5 text-[0.6875rem] text-gray-500 transition-colors hover:bg-black/4 hover:text-gray-800 dark:hover:bg-white/6 dark:hover:text-gray-200"
+		onclick={() => goto('/agents')}
+		aria-label={$t('agents.allAgents')}
+		use:tooltip={$t('agents.allAgents')}
+	>
+		<Icon name="arrow-left" size={12} />{$t('agents.title')}
+	</button>
 	<button
 		type="button"
 		class="flex min-w-0 shrink items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-[0.6875rem] text-gray-600 transition-colors hover:bg-black/4 dark:text-gray-300 dark:hover:bg-white/6"

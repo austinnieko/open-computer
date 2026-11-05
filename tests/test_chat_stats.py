@@ -27,7 +27,11 @@ class UsageNumbersTests(unittest.TestCase):
 
     def test_agent_turn_sums_win(self):
         n = _usage_numbers(
-            {"input_tokens": 5, "output_tokens": 1, "turn": {"input_tokens": 50, "output_tokens": 9, "cost_usd": 0.02}}
+            {
+                "input_tokens": 5,
+                "output_tokens": 1,
+                "turn": {"input_tokens": 50, "output_tokens": 9, "cost_usd": 0.02},
+            }
         )
         self.assertEqual((n["input"], n["output"], n["total"], n["cost_usd"]), (50, 9, 59, 0.02))
 
@@ -38,7 +42,11 @@ class UsageNumbersTests(unittest.TestCase):
 class TallyTests(unittest.TestCase):
     def test_tools_files_models(self):
         out = [
-            {"type": "function_call", "name": "edit_file", "arguments": json.dumps({"path": "/ws/a.py"})},
+            {
+                "type": "function_call",
+                "name": "edit_file",
+                "arguments": json.dumps({"path": "/ws/a.py"}),
+            },
             {
                 "type": "function_call",
                 "name": "agent_tool",
@@ -51,7 +59,12 @@ class TallyTests(unittest.TestCase):
         stats = _tally_messages(
             [
                 msg("user"),
-                msg("assistant", model="m1", output=out, usage={"total_tokens": 10, "duration_ms": 2000}),
+                msg(
+                    "assistant",
+                    model="m1",
+                    output=out,
+                    usage={"total_tokens": 10, "duration_ms": 2000},
+                ),
                 msg("user"),
                 msg("assistant", model="m1", usage={"total_tokens": 5}),
             ],
@@ -73,7 +86,12 @@ class TranslatorUsageTests(unittest.TestCase):
             "type": "session.step.ended",
             "data": {
                 "sessionID": "s",
-                "tokens": {"input": inp, "output": out, "reasoning": 1, "cache": {"read": 2, "write": 0}},
+                "tokens": {
+                    "input": inp,
+                    "output": out,
+                    "reasoning": 1,
+                    "cache": {"read": 2, "write": 0},
+                },
                 "cost": cost,
             },
         }

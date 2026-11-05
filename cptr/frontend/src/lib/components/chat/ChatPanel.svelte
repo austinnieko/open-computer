@@ -65,6 +65,7 @@
 	import UserMessage from './UserMessage.svelte';
 	import AssistantMessage from './AssistantMessage.svelte';
 	import ChatHistory from './ChatHistory.svelte';
+	import HomeAgents from './HomeAgents.svelte';
 	import StatusModal from './StatusModal.svelte';
 	import SkillsModal from './SkillsModal.svelte';
 	import { listCommandSessions, type CommandSession } from '$lib/apis/terminal';
@@ -1914,6 +1915,9 @@
 					onqueueedit={handleQueueEdit}
 					onqueuedelete={handleQueueDelete}
 				/>
+				{#if !workspace}
+					<HomeAgents />
+				{/if}
 				<ChatHistory
 					chats={previousChats}
 					onopen={openChat}
