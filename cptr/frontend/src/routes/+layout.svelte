@@ -99,7 +99,7 @@
 			const keyboardInset = Math.max(0, window.innerHeight - visualBottom);
 			document.documentElement.style.setProperty(
 				'--keyboard-inset-bottom',
-				keyboardInset > 100 ? `${keyboardInset}px` : '0'
+				keyboardInset > 100 ? `${keyboardInset}px` : '0px'
 			);
 		};
 
@@ -488,7 +488,7 @@
 		<div
 			id="main-col"
 			class="flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden"
-			style="padding-top: env(safe-area-inset-top, 0); padding-bottom: var(--keyboard-inset-bottom, 0);"
+			style="padding-top: env(safe-area-inset-top, 0px); padding-bottom: max(var(--keyboard-inset-bottom, 0px), env(safe-area-inset-bottom, 0px)); padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px);"
 		>
 			<main class="relative flex-1 min-h-0 overflow-hidden">
 				{@render children()}
@@ -535,6 +535,11 @@
 
 <Toaster
 	position="top-right"
+	mobileOffset={{
+		top: 'max(16px, calc(env(safe-area-inset-top, 0px) + 8px))',
+		right: 'max(16px, env(safe-area-inset-right, 0px))',
+		left: 'max(16px, env(safe-area-inset-left, 0px))'
+	}}
 	theme="system"
 	closeButton
 	richColors

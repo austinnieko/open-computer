@@ -2130,7 +2130,7 @@
 										</div>
 										<!-- svelte-ignore a11y_no_static_element_interactions -->
 										<span
-											class="flex items-center justify-center w-5 h-5 rounded shrink-0 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-white/10 transition-all duration-75"
+											class="touch-show touch-target flex items-center justify-center w-5 h-5 rounded shrink-0 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-white/10 transition-all duration-75"
 											role="button"
 											tabindex="-1"
 											onclick={(e) => openCommitMenu(e, c, i === 0)}

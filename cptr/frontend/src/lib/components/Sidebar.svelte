@@ -116,7 +116,8 @@
 		left: 0;
 		top: 0;
 		bottom: 0;
-		width: 13.75rem;
+		/* Phones: an overlay, so it can be roomier than the desktop column. */
+		width: min(18rem, 85vw);
 		z-index: 50;
 		display: flex;
 		flex-direction: column;
@@ -124,6 +125,9 @@
 		color: var(--app-fg);
 		border-right: 1px solid var(--app-border);
 		padding-top: env(safe-area-inset-top, 0);
+		/* Clear the iPhone home indicator and, in landscape, the notch. */
+		padding-bottom: env(safe-area-inset-bottom, 0);
+		padding-left: env(safe-area-inset-left, 0);
 	}
 
 	:global(.dark) .sidebar {

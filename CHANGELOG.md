@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 📱 **Better on iPhone (Safari and the home-screen app).** On touch screens only, so the desktop layout is unchanged:
+  - **Thumb-sized controls:** sidebar rows are 40px tall; dashboard and row buttons are 32–36px (were 20–28px).
+  - **No hidden controls:** buttons that only appeared on hover (a workspace's ⋯ and new chat, a chat's ⋯, Git commit menus, notification close) are always visible on touch. Keyboard-shortcut hints are hidden.
+  - **Safe areas:** content, the Git bar and the sidebar stay clear of the home indicator, and of the notch in landscape. Toasts stay below the Dynamic Island.
+  - **Roomier sidebar on phones:** up to 288px wide, since it overlays the page there.
+  - **Agents dashboard on phones:** the state cards and usage tiles are one swipeable row each, so the agent list starts on the first screen.
 - 🧭 **Agents dashboard.** A new **Agents** item in the sidebar (under Search) opens one page for every task agent. It shows how many agents are running and how many need you.
   - **Needs you, up top:** agents waiting on an answer or blocked, with the reason. **Answer** / **Fix** jumps to the agent and opens its reply box.
   - **Overview:** a bar of every agent by state, and cards for *Needs attention*, *Running*, *Waiting*, *In review* and *Finished today*. Click a bar segment or a card to filter. Below them: tokens, cost, agent time and tool calls, open conflicts, and a meter of how many agents are writing code.

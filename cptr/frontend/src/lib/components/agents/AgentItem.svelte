@@ -255,7 +255,7 @@
 				<span class="w-8 text-right text-[0.6875rem] tabular-nums text-gray-400"
 					>{ago(task.updated_at, now)}</span
 				>
-				<span class="flex w-6 justify-center">{@render actionButton(false)}</span>
+				<span class="action-slot flex w-6 justify-center">{@render actionButton(false)}</span>
 				<Icon
 					name="chevron-down"
 					size={12}
@@ -493,6 +493,20 @@
 	}
 	.ghost-btn:disabled {
 		opacity: 0.5;
+	}
+	/* Touch: thumb-sized buttons; the action column widens to match. */
+	@media (hover: none) and (pointer: coarse) {
+		.action-btn {
+			width: 2.25rem;
+			height: 2.25rem;
+		}
+		.action-slot {
+			width: 2.25rem;
+		}
+		.ghost-btn {
+			height: 2.25rem;
+			padding: 0 0.8rem;
+		}
 	}
 	.expand {
 		animation: expand-in 0.14s ease-out;

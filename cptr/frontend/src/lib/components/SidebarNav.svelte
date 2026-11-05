@@ -37,7 +37,7 @@
 
 <div class="px-1.5 mt-1 shrink-0">
 	<button
-		class="group flex items-center gap-1.5 w-full h-7 px-2 rounded-lg text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors duration-100"
+		class="group flex items-center gap-1.5 chat-row w-full h-7 px-2 rounded-lg text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors duration-100"
 		onclick={() => showSearch.set(true)}
 	>
 		<Icon name="search" size={14} />
@@ -46,7 +46,7 @@
 		>
 		<KeyPill
 			text={searchShortcut}
-			class="ml-auto shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-100"
+			class="touch-hide ml-auto shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-100"
 		/>
 	</button>
 </div>
@@ -54,7 +54,7 @@
 <div class="px-1.5 shrink-0">
 	<a
 		href="/agents"
-		class="flex items-center gap-1.5 w-full h-7 px-2 rounded-lg text-xs transition-colors duration-100 no-underline {page
+		class="flex items-center gap-1.5 chat-row w-full h-7 px-2 rounded-lg text-xs transition-colors duration-100 no-underline {page
 			.url.pathname === '/agents'
 			? 'bg-black/5 text-gray-800 dark:bg-white/8 dark:text-gray-100'
 			: 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}"
@@ -82,7 +82,7 @@
 	<div class="px-1.5 shrink-0">
 		<a
 			href="/scheduled"
-			class="flex items-center gap-1.5 w-full h-7 px-2 rounded-lg text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors duration-100 no-underline"
+			class="flex items-center gap-1.5 chat-row w-full h-7 px-2 rounded-lg text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors duration-100 no-underline"
 			onclick={openAutomations}
 		>
 			<Icon name="clock" size={14} />

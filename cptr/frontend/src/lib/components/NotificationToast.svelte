@@ -69,7 +69,7 @@
 	<!-- Close button -->
 	<button
 		bind:this={closeButtonEl}
-		class="app-subtle-surface app-muted app-interactive absolute -top-0.5 -left-0.5 p-0.5 rounded-full opacity-0 group-hover:opacity-100 border-none cursor-pointer transition-opacity duration-150 z-10"
+		class="touch-show app-subtle-surface app-muted app-interactive absolute -top-0.5 -left-0.5 p-0.5 rounded-full opacity-0 group-hover:opacity-100 border-none cursor-pointer transition-opacity duration-150 z-10"
 		aria-label={$t('a11y.dismissNotification')}
 		onclick={(e) => {
 			e.stopPropagation();

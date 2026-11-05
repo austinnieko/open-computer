@@ -361,7 +361,8 @@
 					placeholder={$t('agents.search')}
 					bind:value={query}
 				/>
-				<kbd class="kbd kbd-wide pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2"
+				<kbd
+					class="kbd kbd-wide touch-hide pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2"
 					>/</kbd
 				>
 			</div>
@@ -477,7 +478,7 @@
 							>
 						{/if}
 					</div>
-					<div class="flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full">
+					<div class="fleet flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full">
 						{#each segments as seg (seg.state)}
 							<button
 								class="fleet-seg h-full first:rounded-l-full last:rounded-r-full {SWATCH[
@@ -493,7 +494,9 @@
 				</div>
 
 				<!-- Group cards: each one filters -->
-				<div class="grid grid-cols-2 gap-2 sm:grid-cols-5">
+				<div
+					class="strip -mx-4 flex snap-x snap-mandatory gap-2 overflow-x-auto px-4 sm:mx-0 sm:grid sm:grid-cols-5 sm:overflow-visible sm:px-0"
+				>
 					{#each GROUPS as g, i (g.key)}
 						{@const n = groupCount(g.key)}
 						{@const accent = GROUP_ACCENT[g.key]}
@@ -502,10 +505,7 @@
 							class="metric relative overflow-hidden rounded-xl border px-3 py-2.5 text-left {filter ===
 							g.key
 								? 'border-gray-400/70 ring-2 ring-gray-900/5 dark:border-white/25 dark:ring-white/10'
-								: 'border-gray-200/80 hover:border-gray-300 dark:border-white/8 dark:hover:border-white/15'} {i ===
-							4
-								? 'col-span-2 sm:col-span-1'
-								: ''}"
+								: 'border-gray-200/80 hover:border-gray-300 dark:border-white/8 dark:hover:border-white/15'} strip-item"
 							aria-pressed={filter === g.key}
 							onclick={() => setFilter(g.key)}
 						>
@@ -518,7 +518,7 @@
 								<span class="text-[0.6875rem] font-medium text-gray-500 dark:text-gray-400"
 									>{$t(`agents.group.${g.key}`)}</span
 								>
-								<kbd class="kbd kbd-wide">{i + 1}</kbd>
+								<kbd class="kbd kbd-wide touch-hide">{i + 1}</kbd>
 							</span>
 							<span
 								class="relative mt-1 block text-2xl font-semibold tracking-tight tabular-nums {n
@@ -540,20 +540,22 @@
 				</div>
 
 				<!-- Usage: same five columns and gaps as the cards above, so edges line up -->
-				<div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
-					<div class="stat">
+				<div
+					class="strip -mx-4 mt-2 flex snap-x snap-mandatory gap-2 overflow-x-auto px-4 sm:mx-0 sm:grid sm:grid-cols-5 sm:overflow-visible sm:px-0"
+				>
+					<div class="stat strip-item">
 						<span class="stat-label">{$t('agents.tokens')}</span>
 						<span class="stat-value"
 							>{agents.usageTotals ? compactNumber(agents.usageTotals.tokens) : '–'}</span
 						>
 					</div>
-					<div class="stat">
+					<div class="stat strip-item">
 						<span class="stat-label">{$t('agents.cost')}</span>
 						<span class="stat-value"
 							>{agents.usageTotals ? money(agents.usageTotals.cost_usd) : '–'}</span
 						>
 					</div>
-					<div class="stat">
+					<div class="stat strip-item">
 						<span class="stat-label">{$t('agents.agentTime')}</span>
 						<span class="stat-value"
 							>{agents.usageTotals ? compactDuration(agents.usageTotals.duration_ms) : '–'}</span
@@ -564,16 +566,13 @@
 							>
 						{/if}
 					</div>
-					<div class="stat">
+					<div class="stat strip-item">
 						<span class="stat-label">{$t('agents.conflictsLabel')}</span>
 						<span class="stat-value {openConflicts ? 'text-red-600 dark:text-red-400' : ''}"
 							>{openConflicts}</span
 						>
 					</div>
-					<div
-						class="stat col-span-2 sm:col-span-1"
-						use:tooltip={$t('agents.slots', { max: agents.maxWriters })}
-					>
+					<div class="stat strip-item" use:tooltip={$t('agents.slots', { max: agents.maxWriters })}>
 						<span class="stat-label">{$t('agents.writing')}</span>
 						<span class="stat-value"
 							>{writing}<span class="font-normal text-gray-400">/{agents.maxWriters}</span></span
@@ -615,7 +614,7 @@
 							<section
 								class="overflow-hidden rounded-2xl border border-gray-200/80 dark:border-white/8"
 							>
-								<div class="flex items-center gap-2 px-3 py-2.5">
+								<div class="touch-row flex items-center gap-2 px-3 py-2.5">
 									<button
 										class="flex min-w-0 flex-1 items-center gap-2 text-left"
 										onclick={() => toggleCollapsed(repo.key)}
@@ -667,7 +666,7 @@
 										{@const fKey = `${repo.key}:${folder.path}`}
 										{@const folderOpen = !collapsed.has(fKey)}
 										<div class="border-t border-gray-100 dark:border-white/6">
-											<div class="flex items-center gap-2 py-1.5 pr-3 pl-3 sm:pl-7">
+											<div class="touch-row flex items-center gap-2 py-1.5 pr-3 pl-3 sm:pl-7">
 												<button
 													class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
 													onclick={() => toggleCollapsed(fKey)}
@@ -785,7 +784,7 @@
 
 				<!-- Keyboard -->
 				<p
-					class="mt-6 hidden flex-wrap justify-center gap-x-3 gap-y-1 text-[0.625rem] text-gray-400 sm:flex"
+					class="touch-hide mt-6 hidden flex-wrap justify-center gap-x-3 gap-y-1 text-[0.625rem] text-gray-400 sm:flex"
 				>
 					<span><kbd class="kbd">/</kbd> {$t('agents.keySearch')}</span>
 					<span><kbd class="kbd">j</kbd><kbd class="kbd">k</kbd> {$t('agents.keyMove')}</span>
@@ -803,6 +802,7 @@
 <style>
 	.icon-btn {
 		display: flex;
+		flex-shrink: 0;
 		width: 1.75rem;
 		height: 1.75rem;
 		align-items: center;
@@ -842,6 +842,19 @@
 	@media (max-width: 639px) {
 		.kbd-wide {
 			display: none;
+		}
+	}
+	/* Phones: the card and usage rows scroll sideways instead of stacking. */
+	.strip {
+		scrollbar-width: none;
+	}
+	.strip::-webkit-scrollbar {
+		display: none;
+	}
+	@media (max-width: 639px) {
+		.strip :global(.strip-item) {
+			flex: 0 0 9.25rem;
+			scroll-snap-align: start;
 		}
 	}
 	.segmented {
@@ -926,5 +939,28 @@
 	.link-btn:hover {
 		color: var(--app-fg);
 		background: color-mix(in oklab, var(--app-fg) 6%, transparent);
+	}
+	/* Touch: larger tap targets. */
+	@media (hover: none) and (pointer: coarse) {
+		.icon-btn {
+			width: 2.25rem;
+			height: 2.25rem;
+		}
+		.segmented button {
+			width: 2.25rem;
+			height: 2rem;
+		}
+		.search {
+			height: 2.25rem;
+		}
+		.link-btn {
+			padding: 0.5rem 0.6rem;
+		}
+		.fleet {
+			height: 0.875rem;
+		}
+		.touch-row > button {
+			align-self: stretch;
+		}
 	}
 </style>

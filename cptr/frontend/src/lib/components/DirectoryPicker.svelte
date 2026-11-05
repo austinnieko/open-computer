@@ -399,7 +399,7 @@
 					{/if}
 				{/each}
 				<span
-					class="ml-1 text-gray-300 dark:text-gray-700 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shrink-0 flex items-center"
+					class="touch-show ml-1 text-gray-300 dark:text-gray-700 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shrink-0 flex items-center"
 				>
 					<Icon name="pencil" size={10} />
 				</span>

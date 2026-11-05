@@ -470,7 +470,7 @@
 						{#if i < 9 && !isWorkspaceScoped}
 							<KeyPill
 								text={`⌘${i + 1}`}
-								class="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-100"
+								class="touch-hide shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-100"
 							/>
 						{/if}
 						<span class="text-[0.625rem] text-gray-400 dark:text-gray-600 shrink-0"

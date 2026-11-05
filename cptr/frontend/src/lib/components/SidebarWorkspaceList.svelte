@@ -536,7 +536,7 @@
 		</span>
 	</button>
 	<button
-		class="flex items-center justify-center w-7 h-7 rounded-lg text-gray-300 hover:text-gray-500 dark:text-gray-600 dark:hover:text-gray-400 transition-colors duration-100"
+		class="touch-target flex items-center justify-center w-7 h-7 rounded-lg text-gray-300 hover:text-gray-500 dark:text-gray-600 dark:hover:text-gray-400 transition-colors duration-100"
 		onclick={onaddworkspace}
 		aria-label={$t('sidebar.addWorkspace')}
 		use:tooltip={$t('sidebar.addWorkspace')}
@@ -558,19 +558,19 @@
 		{@const isLoading = wsChatsLoading.has(ws.path)}
 		<div class="ws-item">
 			<div
-				class="group flex items-center gap-1 w-full h-7 px-2 rounded-lg text-xs font-medium transition-colors duration-100
+				class="chat-row group flex items-center gap-1 w-full h-7 px-2 rounded-lg text-xs font-medium transition-colors duration-100
 				{ws.path === currentPath
 					? 'bg-gray-200/50 text-gray-900 dark:bg-white/8 dark:text-white'
 					: 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}"
 			>
 				<a
 					href="/?workspace={encodeURIComponent(ws.path)}"
-					class="flex items-center gap-1.5 flex-1 min-w-0 no-underline text-inherit"
+					class="flex items-center gap-1.5 flex-1 min-w-0 self-stretch no-underline text-inherit"
 					onclick={(e) => openWorkspace(e, ws.path)}
 				>
 					{#if $chatEnabled}
 						<span
-							class="ws-chevron shrink-0"
+							class="ws-chevron touch-tall shrink-0"
 							role="button"
 							tabindex="0"
 							onclick={(e) => {
@@ -606,7 +606,7 @@
 					{/if}
 				</a>
 				<span
-					class="flex items-center justify-center w-4 h-4 shrink-0 text-gray-400 opacity-0 group-hover:opacity-100 hover:text-gray-600 dark:hover:text-gray-300 transition-all duration-75"
+					class="touch-show touch-icon flex items-center justify-center w-4 h-4 shrink-0 text-gray-400 opacity-0 group-hover:opacity-100 hover:text-gray-600 dark:hover:text-gray-300 transition-all duration-75"
 					role="button"
 					tabindex="-1"
 					onclick={(e) => openWsMenu(e, ws.path)}
@@ -616,7 +616,7 @@
 				</span>
 				{#if $chatEnabled}
 					<span
-						class="flex items-center justify-center w-4 h-4 shrink-0 text-gray-400 opacity-0 group-hover:opacity-100 hover:text-gray-600 dark:hover:text-gray-300 transition-all duration-75"
+						class="touch-show touch-icon flex items-center justify-center w-4 h-4 shrink-0 text-gray-400 opacity-0 group-hover:opacity-100 hover:text-gray-600 dark:hover:text-gray-300 transition-all duration-75"
 						role="button"
 						tabindex="-1"
 						onclick={() => newChat(ws.path)}
@@ -665,7 +665,7 @@
 						{/each}
 						{#if hasMoreChats}
 							<button
-								class="ws-chat-show-more"
+								class="ws-chat-show-more chat-row"
 								disabled={isLoading}
 								onclick={() => fetchWorkspaceChats(ws.path, true)}
 							>

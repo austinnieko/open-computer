@@ -18,11 +18,11 @@
 >
 	<a
 		href="/"
-		class="flex items-center gap-1.5 text-xs font-semibold tracking-tight text-gray-900 dark:text-white"
+		class="touch-target flex items-center gap-1.5 text-xs font-semibold tracking-tight text-gray-900 dark:text-white"
 		onclick={goHome}><img src="/favicon.png" alt={$t('app.logoAlt')} class="w-4 h-4" />Computer</a
 	>
 	<button
-		class="flex items-center justify-center w-7 h-7 rounded-lg text-gray-300 hover:text-gray-500 dark:text-gray-600 dark:hover:text-gray-400 transition-colors duration-100"
+		class="touch-target flex items-center justify-center w-7 h-7 rounded-lg text-gray-300 hover:text-gray-500 dark:text-gray-600 dark:hover:text-gray-400 transition-colors duration-100"
 		onclick={() => sidebarOpen.set(false)}
 		aria-label={$t('sidebar.collapse')}
 		use:tooltip={$t('sidebar.collapse')}

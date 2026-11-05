@@ -102,7 +102,7 @@
 				<!-- Delete (hover) -->
 				<button
 					type="button"
-					class="opacity-0 group-hover:opacity-100 text-gray-300 dark:text-gray-700 hover:text-red-500 dark:hover:text-red-400 transition-all p-0.5"
+					class="touch-show touch-target opacity-0 group-hover:opacity-100 text-gray-300 dark:text-gray-700 hover:text-red-500 dark:hover:text-red-400 transition-all p-0.5"
 					onclick={(e) => handleDelete(e, bot)}
 				>
 					<Icon name="trash" size={11} />
