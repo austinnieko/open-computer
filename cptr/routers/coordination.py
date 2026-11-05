@@ -319,8 +319,10 @@ async def summary(request: Request, usage: bool = False):
     if usage:
         totals = dict.fromkeys(USAGE_KEYS, 0)
         per_task = {}
+        index = await _subagent_index()
+        chats = {c.id: c for c in await Chat.get_by_ids(chat_ids)}
         for t in tasks:
-            per_task[t.id] = await _task_usage(t)
+            per_task[t.id] = await _task_usage(t, index, chats)
             _add_usage(totals, per_task[t.id])
         result["usage"] = {"tasks": per_task, "totals": totals}
         # Open file conflicts per repository, for the dashboard's attention count.
@@ -712,29 +714,93 @@ async def remove_dependency(request: Request, task_id: str, depends_on: str):
 USAGE_KEYS = ("tokens", "cost_usd", "duration_ms", "tool_calls", "turns", "files")
 
 
-async def _task_usage(task: CoordTask) -> dict:
-    """Tokens, cost, working time, tool calls, turns and files of one task, from
-    its chat and its sub-agent chats."""
+# Usage of one chat, by (chat id, updated_at): the chat is touched when a turn
+# ends, so a finished chat's numbers never change until its next turn.
+_chat_usage_cache: dict[tuple[str, int], dict] = {}
+_CHAT_USAGE_CACHE_MAX = 5000
+
+
+async def _subagent_index() -> dict[str, list[Chat]]:
+    """parent chat id -> its internal sub-agent chats (all levels), built once
+    per request instead of scanning every chat once per task."""
+    from cptr.models.chats import is_internal_chat
+    from cptr.utils.db import get_db
+    from sqlalchemy import select
+
+    async with await get_db() as db:
+        result = await db.execute(select(Chat).where(Chat.meta.is_not(None)))
+        candidates = [c for c in result.scalars().all() if is_internal_chat(c.meta)]
+    children: dict[str, list[Chat]] = {}
+    for chat in candidates:
+        parent = (chat.meta or {}).get("parent_chat_id")
+        if parent:
+            children.setdefault(parent, []).append(chat)
+    return children
+
+
+def _descendants(index: dict[str, list[Chat]], root: str) -> list[Chat]:
+    out: list[Chat] = []
+    stack = [root]
+    seen = {root}
+    while stack:
+        for child in index.get(stack.pop(), []):
+            if child.id not in seen:
+                seen.add(child.id)
+                out.append(child)
+                stack.append(child.id)
+    return out
+
+
+async def _chat_usage(chat_id: str, updated_at: int | None, active: set[str]) -> dict:
     from cptr.models.chats import ChatMessage
     from cptr.routers.chat import _tally_messages
+
+    key = (chat_id, int(updated_at or 0))
+    if chat_id not in active and key in _chat_usage_cache:
+        return _chat_usage_cache[key]
+    stats = _tally_messages(await ChatMessage.get_all_by_chat(chat_id))
+    usage = {
+        "tokens": stats["totals"]["total"],
+        "cost_usd": stats["totals"]["cost_usd"],
+        "duration_ms": stats["totals"]["duration_ms"],
+        "tool_calls": sum(t["count"] for t in stats["tools"]),
+        "turns": len(stats["turns"]),
+    }
+    if chat_id not in active:  # a running turn's numbers are still changing
+        if len(_chat_usage_cache) >= _CHAT_USAGE_CACHE_MAX:
+            _chat_usage_cache.clear()
+        _chat_usage_cache[key] = usage
+    return usage
+
+
+async def _task_usage(
+    task: CoordTask,
+    index: dict[str, list[Chat]] | None = None,
+    chats: dict[str, Chat] | None = None,
+) -> dict:
+    """Tokens, cost, working time, tool calls, turns and files of one task, from
+    its chat and its sub-agent chats (cached per chat until it changes)."""
+    from cptr.utils.chat_task import get_active_chat_ids
 
     usage = dict.fromkeys(USAGE_KEYS, 0)
     # Declared files plus the ones Git shows changed in its worktree.
     usage["files"] = len(set(task.files or []) | set((task.meta or {}).get("observed_files") or []))
     if task.chat_id:
-        chat_ids = [task.chat_id] + [
-            c.id
-            for c in await Chat.get_internal_descendants(task.chat_id)
-            if (c.meta or {}).get("type") == "subagent"
+        if index is None:
+            index = await _subagent_index()
+        root = (chats or {}).get(task.chat_id) or await Chat.get_by_id(task.chat_id)
+        members = ([root] if root else []) + [
+            c for c in _descendants(index, task.chat_id) if (c.meta or {}).get("type") == "subagent"
         ]
-        for chat_id in chat_ids:
-            stats = _tally_messages(await ChatMessage.get_all_by_chat(chat_id))
-            usage["tokens"] += stats["totals"]["total"]
-            usage["cost_usd"] += stats["totals"]["cost_usd"]
-            usage["duration_ms"] += stats["totals"]["duration_ms"]
-            usage["tool_calls"] += sum(t["count"] for t in stats["tools"])
-            if chat_id == task.chat_id:
-                usage["turns"] = len(stats["turns"])
+        active = get_active_chat_ids()
+        for chat in members:
+            one = await _chat_usage(chat.id, chat.updated_at, active)
+            usage["tokens"] += one["tokens"]
+            usage["cost_usd"] += one["cost_usd"]
+            usage["duration_ms"] += one["duration_ms"]
+            usage["tool_calls"] += one["tool_calls"]
+            if chat.id == task.chat_id:
+                usage["turns"] = one["turns"]
     usage["cost_usd"] = round(usage["cost_usd"], 6)
     return usage
 
@@ -753,8 +819,10 @@ async def list_usage(request: Request, root: str):
     tasks = await CoordTask.query(user_id=_user_id(request), repo_key=repo_key)
     totals = dict.fromkeys(USAGE_KEYS, 0)
     per_task: dict[str, dict] = {}
+    index = await _subagent_index()
+    chats = {c.id: c for c in await Chat.get_by_ids([t.chat_id for t in tasks if t.chat_id])}
     for task in tasks:
-        per_task[task.id] = await _task_usage(task)
+        per_task[task.id] = await _task_usage(task, index, chats)
         _add_usage(totals, per_task[task.id])
     return {"tasks": per_task, "totals": totals}
 
