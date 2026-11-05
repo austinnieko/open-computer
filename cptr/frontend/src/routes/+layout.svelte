@@ -60,6 +60,16 @@
 	let gitSettingsAvailable = $state(false);
 	let connectionToast: string | number | undefined;
 	let applyingServiceWorkerUpdate = false;
+	let swRegistration: ServiceWorkerRegistration | null = null;
+	let lastUpdateCheck = 0;
+
+	/** Ask the server for a newer app version (throttled). An installed app that
+	 * is only ever suspended and resumed would otherwise never check. */
+	function checkForAppUpdate(minGapMs = 10 * 60_000) {
+		if (!swRegistration || Date.now() - lastUpdateCheck < minGapMs) return;
+		lastUpdateCheck = Date.now();
+		swRegistration.update().catch(() => {});
+	}
 	let lastGitRefreshFsTick = 0;
 	let gitRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 	const BROWSER_SW_CLEANUP_RELOAD = 'cptr:pwa:browser-sw-cleanup-reload';
@@ -116,6 +126,36 @@
 		}
 		window.addEventListener('offline', showOfflineToast);
 		window.addEventListener('online', showOnlineToast);
+
+		// Coming back to the app (switching to it on a phone, unlocking, or the
+		// network returning): the old connection may be dead without knowing it,
+		// so reconnect, which makes every view refetch, and check for an update.
+		let hiddenAt = document.visibilityState === 'hidden' ? Date.now() : 0;
+		const RESUME_AFTER_MS = 3000;
+		const resume = () => {
+			if (authState !== 'authenticated') return;
+			socketStore.reconnect();
+			checkForAppUpdate();
+		};
+		const onVisibility = () => {
+			if (document.visibilityState === 'hidden') {
+				hiddenAt = Date.now();
+				return;
+			}
+			const away = hiddenAt ? Date.now() - hiddenAt : 0;
+			hiddenAt = 0;
+			if (away >= RESUME_AFTER_MS || !socketStore.connected) resume();
+		};
+		const onPageShow = (event: PageTransitionEvent) => {
+			if (event.persisted) resume(); // restored from the back/forward cache
+		};
+		const onOnline = () => resume();
+		document.addEventListener('visibilitychange', onVisibility);
+		window.addEventListener('pageshow', onPageShow);
+		window.addEventListener('online', onOnline);
+		const updateTimer = setInterval(() => {
+			if (document.visibilityState === 'visible') checkForAppUpdate(30 * 60_000);
+		}, 5 * 60_000);
 		const openSettings = (event: Event) => {
 			const detail = (event as CustomEvent<{ tab?: string }>).detail;
 			settingsTab = detail?.tab || 'general';
@@ -125,6 +165,10 @@
 
 		return () => {
 			clearInterval(healthCheck);
+			clearInterval(updateTimer);
+			document.removeEventListener('visibilitychange', onVisibility);
+			window.removeEventListener('pageshow', onPageShow);
+			window.removeEventListener('online', onOnline);
 			document.documentElement.style.removeProperty('--keyboard-inset-bottom');
 			window.removeEventListener('resize', syncKeyboardInset);
 			vv?.removeEventListener('resize', syncKeyboardInset);
@@ -332,6 +376,7 @@
 	async function registerServiceWorker() {
 		if (!('serviceWorker' in navigator)) return;
 		const registration = await navigator.serviceWorker.register('/service-worker.js');
+		swRegistration = registration;
 		if (registration.waiting && navigator.serviceWorker.controller) {
 			applyServiceWorkerUpdate(registration);
 		}
