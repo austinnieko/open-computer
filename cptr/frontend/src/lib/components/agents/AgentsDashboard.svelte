@@ -548,11 +548,15 @@
 						<span class="stat-value"
 							>{agents.usageTotals ? compactNumber(agents.usageTotals.tokens) : '–'}</span
 						>
+						<!-- Cost only when there is any: local models and subscriptions report none. -->
+						{#if agents.usageTotals && agents.usageTotals.cost_usd > 0}
+							<span class="stat-sub">{money(agents.usageTotals.cost_usd)} {$t('agents.cost')}</span>
+						{/if}
 					</div>
 					<div class="stat strip-item">
-						<span class="stat-label">{$t('agents.cost')}</span>
+						<span class="stat-label">{$t('agents.filesChanged')}</span>
 						<span class="stat-value"
-							>{agents.usageTotals ? money(agents.usageTotals.cost_usd) : '–'}</span
+							>{agents.usageTotals ? compactNumber(agents.usageTotals.files) : '–'}</span
 						>
 					</div>
 					<div class="stat strip-item">
@@ -904,6 +908,10 @@
 		padding: 0.625rem 0.75rem;
 		border-radius: 0.75rem;
 		border: 1px solid color-mix(in oklab, var(--app-fg) 9%, transparent);
+	}
+	/* Some labels are shared with inline text ("19 tool calls"), so capitalise here. */
+	.stat-label::first-letter {
+		text-transform: uppercase;
 	}
 	.stat-sub {
 		margin-top: 0.1rem;

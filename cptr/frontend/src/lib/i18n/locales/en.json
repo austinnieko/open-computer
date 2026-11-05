@@ -973,6 +973,7 @@
 	"agents.cost": "spent",
 	"agents.agentTime": "agent time",
 	"agents.toolCalls": "tool calls",
+	"agents.filesChanged": "Files changed",
 	"agents.slots": "Up to {{max}} agents write code at once",
 	"agents.showing": "Showing {{count}} of {{total}}",
 	"agents.clearFilter": "Show all",
