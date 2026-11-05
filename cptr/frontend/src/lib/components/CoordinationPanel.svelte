@@ -287,6 +287,76 @@
 		})).filter((group) => group.tasks.length > 0)
 	);
 
+	// ── Clear finished ─────────────────────────────────────────
+	// Done and abandoned tasks in this view, except ones a task that hasn't started
+	// yet depends on: it merges their work in when it starts, so they must stay.
+	const finishedTasks = $derived(grouped.find((g) => g.key === 'done')?.tasks ?? []);
+	const neededBy = (task: CoordTask) =>
+		coord.dependencies
+			.filter((d) => d.depends_on === task.id)
+			.map((d) => coord.tasks.find((x) => x.id === d.task_id))
+			.filter(
+				(x): x is CoordTask =>
+					!!x &&
+					!['completed', 'ended'].includes(x.status) &&
+					// Once started it has merged its dependencies in (recorded once).
+					x.meta?.dependency_merges == null
+			);
+	const clearable = $derived(finishedTasks.filter((task) => !neededBy(task).length));
+	let clearing = $state(false);
+
+	async function clearFinished() {
+		const tasks = clearable;
+		if (!tasks.length) return;
+		const kept = finishedTasks.length - tasks.length;
+		const withFolders = tasks.filter((x) => x.worktree_path).length;
+		const answer = await requestChoice({
+			title: $t('coordination.clearTitle', { count: tasks.length }),
+			message:
+				$t('coordination.clearMessage', { count: tasks.length }) +
+				(kept ? ' ' + $t('coordination.clearKept', { count: kept }) : ''),
+			confirmLabel: $t('coordination.clearKeepFolders'),
+			...(withFolders
+				? {
+						altLabel: $t('coordination.clearDeleteFolders', { count: withFolders }),
+						altDanger: true
+					}
+				: { altLabel: '' })
+		});
+		if (answer === 'cancel') return;
+		const removeFolders = answer === 'alt';
+		clearing = true;
+		let cleared = 0;
+		const folderKept: string[] = [];
+		const failed: string[] = [];
+		for (const task of tasks) {
+			try {
+				await deleteCoordTask(task.id, removeFolders && !!task.worktree_path);
+				cleared += 1;
+			} catch (error: any) {
+				if (removeFolders && task.worktree_path) {
+					// Usually uncommitted changes in its folder: clear the task, keep the folder.
+					try {
+						await deleteCoordTask(task.id, false);
+						cleared += 1;
+						folderKept.push(task.title);
+						continue;
+					} catch {
+						// fall through
+					}
+				}
+				failed.push(`${task.title}: ${error?.message ?? error}`);
+			}
+		}
+		clearing = false;
+		if (selectedId && tasks.some((x) => x.id === selectedId)) selectedId = null;
+		if (cleared) toast.success($t('coordination.cleared', { count: cleared }));
+		if (folderKept.length)
+			toast.message($t('coordination.clearFolderKept', { tasks: folderKept.join(', ') }));
+		if (failed.length) toast.error(failed.join('\n'));
+		await refresh(root);
+	}
+
 	const openConflicts = $derived(coord.conflicts.filter((c) => c.status !== 'resolved'));
 	const counts = $derived({
 		running: coord.tasks.filter((task) => task.status === 'running').length,
@@ -861,9 +931,23 @@
 					{/if}
 				{/each}
 				{#if grouped.some((g) => g.key === 'done')}
-					<button class="section-toggle" onclick={() => (showDone = !showDone)}>
-						{showDone ? $t('coordination.hideDone') : $t('coordination.showDone')}
-					</button>
+					<div class="flex items-center">
+						<button class="section-toggle flex-1" onclick={() => (showDone = !showDone)}>
+							{showDone ? $t('coordination.hideDone') : $t('coordination.showDone')}
+						</button>
+						{#if clearable.length}
+							<button
+								class="section-toggle touch-target w-auto! shrink-0 text-right hover:text-gray-800 dark:hover:text-gray-200"
+								disabled={clearing}
+								onclick={clearFinished}
+								use:tooltip={$t('coordination.clearHint')}
+							>
+								{clearing
+									? $t('coordination.clearing')
+									: $t('coordination.clearFinished', { count: clearable.length })}
+							</button>
+						{/if}
+					</div>
 				{/if}
 
 				{#if coord.integrations.length}
