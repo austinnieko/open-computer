@@ -7,20 +7,31 @@ export interface ConfirmOptions {
 	cancelLabel?: string;
 }
 
+/** A third, secondary answer (e.g. "No, abandon it") shown between Cancel and Confirm. */
+export interface ChoiceOptions extends ConfirmOptions {
+	altLabel: string;
+	/** Style the alternative as destructive. */
+	altDanger?: boolean;
+}
+
+export type ConfirmAnswer = 'confirm' | 'alt' | 'cancel';
+
 export interface ConfirmRequest extends Required<ConfirmOptions> {
 	id: number;
-	resolve: (confirmed: boolean) => void;
+	altLabel: string | null;
+	altDanger: boolean;
+	resolve: (answer: ConfirmAnswer) => void;
 }
 
 export const confirmDialog = writable<ConfirmRequest | null>(null);
 
 let nextId = 0;
 
-export function requestConfirm(options: ConfirmOptions): Promise<boolean> {
-	if (typeof window === 'undefined') return Promise.resolve(false);
+function open(options: ConfirmOptions & Partial<ChoiceOptions>): Promise<ConfirmAnswer> {
+	if (typeof window === 'undefined') return Promise.resolve('cancel');
 
 	const existing = get(confirmDialog);
-	if (existing) existing.resolve(false);
+	if (existing) existing.resolve('cancel');
 
 	return new Promise((resolve) => {
 		confirmDialog.set({
@@ -29,14 +40,25 @@ export function requestConfirm(options: ConfirmOptions): Promise<boolean> {
 			message: options.message,
 			confirmLabel: options.confirmLabel ?? 'Confirm',
 			cancelLabel: options.cancelLabel ?? 'Cancel',
+			altLabel: options.altLabel ?? null,
+			altDanger: options.altDanger ?? false,
 			resolve
 		});
 	});
 }
 
-export function settleConfirm(confirmed: boolean): void {
+export async function requestConfirm(options: ConfirmOptions): Promise<boolean> {
+	return (await open(options)) === 'confirm';
+}
+
+/** Ask with three answers. Escape and clicking outside always mean 'cancel'. */
+export function requestChoice(options: ChoiceOptions): Promise<ConfirmAnswer> {
+	return open(options);
+}
+
+export function settleConfirm(answer: boolean | ConfirmAnswer): void {
 	const request = get(confirmDialog);
 	if (!request) return;
 	confirmDialog.set(null);
-	request.resolve(confirmed);
+	request.resolve(answer === true ? 'confirm' : answer === false ? 'cancel' : answer);
 }

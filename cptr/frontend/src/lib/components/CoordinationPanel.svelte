@@ -15,7 +15,7 @@
 	import ModelSelector from './common/ModelSelector.svelte';
 	import DiffHunkList from './DiffHunkList.svelte';
 	import { addWorkspace, openChatTab, workspaceList } from '$lib/stores';
-	import { requestConfirm } from '$lib/stores/confirm';
+	import { requestChoice, requestConfirm } from '$lib/stores/confirm';
 	import { chatModels, defaultModel } from '$lib/stores/chat';
 	import { getGitBranches } from '$lib/apis/git';
 	import {
@@ -451,25 +451,34 @@
 		if (ok) await run(`rm:${task.id}`, () => removeCoordWorktree(task.id));
 	}
 
+	/** Tasks still waiting to build on this one. */
+	const dependentsOf = (task: CoordTask) =>
+		coord.dependencies
+			.filter((d) => d.depends_on === task.id)
+			.map((d) => coord.tasks.find((x) => x.id === d.task_id))
+			.filter((x): x is CoordTask => !!x && !['completed', 'ended'].includes(x.status));
+
+	/** Close a task: mark it done (the usual case) or abandon it. */
 	async function endTask(task: CoordTask) {
-		const ok = await requestConfirm({
-			title: $t('coordination.endTitle'),
-			message: $t('coordination.endMessage'),
-			confirmLabel: $t('coordination.end')
+		const waiting = dependentsOf(task);
+		const answer = await requestChoice({
+			title: $t('coordination.closeTitle', { title: task.title }),
+			message: waiting.length
+				? $t('coordination.closeMessageDependents', {
+						count: waiting.length,
+						tasks: waiting.map((x) => x.title).join(', ')
+					})
+				: $t('coordination.closeMessage'),
+			confirmLabel: $t('coordination.markDone'),
+			altLabel: $t('coordination.abandon'),
+			altDanger: true
 		});
-		if (ok) await run(`end:${task.id}`, () => endCoordTask(task.id), $t('coordination.ended'));
+		if (answer === 'confirm')
+			await run(`done:${task.id}`, () => markCoordTaskDone(task.id), $t('coordination.markedDone'));
+		else if (answer === 'alt')
+			await run(`end:${task.id}`, () => endCoordTask(task.id), $t('coordination.ended'));
 	}
 
-	const MARK_DONE_FROM = [
-		'queued',
-		'blocked',
-		'paused',
-		'reviewing',
-		'integration_ready',
-		'failed',
-		'ended',
-		'running'
-	];
 	async function markDone(task: CoordTask) {
 		const ok = await requestConfirm({
 			title: $t('coordination.markDoneTitle'),
@@ -1047,7 +1056,7 @@
 									<Icon name="xmark" size={13} />{$t('coordination.end')}
 								</button>
 							{/if}
-							{#if MARK_DONE_FROM.includes(task.status) && !task.chat_missing}
+							{#if task.status === 'ended' && !task.chat_missing}
 								<button
 									class="btn-secondary"
 									disabled={busy === `done:${task.id}`}

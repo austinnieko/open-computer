@@ -392,3 +392,60 @@ class SummaryTests(ApiTestCase):
         self.assertEqual(data["usage"]["tasks"][tid]["tokens"], 0)
         self.assertEqual(data["usage"]["totals"]["turns"], 0)
         self.assertEqual(data["conflicts"], {task["task"]["repo_key"]: 0})
+
+
+class MarkDoneRouteTests(ApiTestCase):
+    """Mark done through the API, from each state a dependency is likely in."""
+
+    async def _pair(self):
+        from cptr.models.chats import Chat
+        from tests.test_coordination import USER as U
+
+        a_chat = await Chat.create(U, "A", meta={"last_model": "m"})
+        a = await self.task("Dep", chat_id=a_chat.id, start_prompt="do it")
+        b_chat = await Chat.create(U, "B", meta={"last_model": "m"})
+        b = await self.task("Waits", chat_id=b_chat.id, start_prompt="go", depends_on=[a["id"]])
+        await coordinator.refresh(a["repo_key"])
+        return a, b
+
+    async def _assert_dependent_starts(self, a, b):
+        from cptr.models.coordination import CoordConflict, CoordTask
+
+        await coordinator.refresh(a["repo_key"])
+        await coordinator.wait_idle()
+        dep = await CoordTask.get_by_id(a["id"])
+        task = await CoordTask.get_by_id(b["id"])
+        open_kinds = [
+            c.kind
+            for c in await CoordConflict.query(a["repo_key"], statuses={"open", "acknowledged"})
+        ]
+        self.assertEqual(dep.status, "completed")
+        self.assertNotIn("dependency_failed", open_kinds)
+        self.assertEqual(task.blockers, [])
+        self.assertIn(b["id"], [t for t, _ in self.launched])
+
+    async def test_done_while_its_agent_is_running(self):
+        from cptr.models.coordination import CoordTask
+
+        a, b = await self._pair()
+        self.assertEqual((await CoordTask.get_by_id(a["id"])).status, "running")
+        r = await self.post(f"/tasks/{a['id']}/done")
+        self.assertEqual(r.status_code, 200, r.text)
+        await self._assert_dependent_starts(a, b)
+
+    async def test_done_from_review(self):
+        from cptr.utils.coordination import registry
+
+        a, b = await self._pair()
+        await registry.set_status(a["id"], "reviewing")
+        r = await self.post(f"/tasks/{a['id']}/done")
+        self.assertEqual(r.status_code, 200, r.text)
+        await self._assert_dependent_starts(a, b)
+
+    async def test_done_after_end(self):
+        a, b = await self._pair()
+        await self.post(f"/tasks/{a['id']}/end")
+        await coordinator.refresh(a["repo_key"])
+        r = await self.post(f"/tasks/{a['id']}/done")
+        self.assertEqual(r.status_code, 200, r.text)
+        await self._assert_dependent_starts(a, b)

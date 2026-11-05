@@ -60,7 +60,7 @@ def _summary(row: CoordConflict, titles: dict[str, str], other_id: str | None) -
         "dependency_version": "the tasks require different versions of a dependency",
         "merge_conflict": "the branches do not merge cleanly",
         "base_divergence": "the branch no longer merges cleanly into its base",
-        "dependency_failed": "a task this one depends on has failed or was ended",
+        "dependency_failed": "a task this one depends on failed or was abandoned (if its work is finished, mark it done)",
     }.get(row.kind, row.kind.replace("_", " "))
     text = f"{row.level.upper()} conflict with {other}: {detail}"
     if files:
