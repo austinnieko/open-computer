@@ -306,6 +306,62 @@ class UsageTests(ApiTestCase):
         self.assertEqual((data["tasks"], data["totals"]["tokens"]), ({}, 0))
 
 
+class UsageCacheTests(ApiTestCase):
+    """Usage is tallied once per chat and reused until the chat changes."""
+
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        from cptr.routers import coordination as coord_router
+
+        coord_router._chat_usage_cache.clear()
+
+    async def _usage(self, task_id: str) -> dict:
+        data = (await self.client.get(f"/api/coordination/usage?root={self.repo}")).json()
+        return data["tasks"][task_id]
+
+    async def test_cached_until_the_chat_is_touched_and_subagents_count(self):
+        from unittest import mock
+
+        from cptr.models.chats import Chat, ChatMessage
+        from cptr.routers import chat as chat_router
+        from cptr.utils.config import now_ms
+        from tests.test_coordination import USER as U
+
+        body = {"root": str(self.repo), "create_chat": True, "model_id": "m", "title": "Cached"}
+        task = (await self.post("/tasks", body)).json()["task"]
+        await ChatMessage.create(task["chat_id"], "assistant", "a", usage={"input_tokens": 100})
+        sub = await Chat.create(
+            U, "sub", meta={"subagent": True, "type": "subagent", "parent_chat_id": task["chat_id"]}
+        )
+        await ChatMessage.create(sub.id, "assistant", "s", usage={"input_tokens": 7})
+        self.assertEqual((await self._usage(task["id"]))["tokens"], 107)
+
+        real = chat_router._tally_messages
+        with mock.patch.object(chat_router, "_tally_messages", side_effect=real) as tally:
+            self.assertEqual((await self._usage(task["id"]))["tokens"], 107)
+            self.assertEqual(tally.call_count, 0)  # nothing changed: all from cache
+
+            await ChatMessage.create(task["chat_id"], "assistant", "b", usage={"input_tokens": 3})
+            await Chat.touch(task["chat_id"], now_ms() + 1)  # as at the end of a turn
+            self.assertEqual((await self._usage(task["id"]))["tokens"], 110)
+            self.assertEqual(tally.call_count, 1)  # only the changed chat is re-read
+
+    async def test_a_running_chat_is_never_cached(self):
+        from unittest import mock
+
+        from cptr.models.chats import ChatMessage
+        from cptr.routers import coordination as coord_router
+
+        body = {"root": str(self.repo), "create_chat": True, "model_id": "m", "title": "Live"}
+        task = (await self.post("/tasks", body)).json()["task"]
+        await ChatMessage.create(task["chat_id"], "assistant", "a", usage={"input_tokens": 5})
+        with mock.patch("cptr.utils.chat_task.get_active_chat_ids", return_value={task["chat_id"]}):
+            self.assertEqual((await self._usage(task["id"]))["tokens"], 5)
+            await ChatMessage.create(task["chat_id"], "assistant", "b", usage={"input_tokens": 4})
+            self.assertEqual((await self._usage(task["id"]))["tokens"], 9)
+        self.assertNotIn(task["chat_id"], {k[0] for k in coord_router._chat_usage_cache})
+
+
 class OriginFolderTests(ApiTestCase):
     """A task belongs to the folder it was started from, even in a shared repo."""
 

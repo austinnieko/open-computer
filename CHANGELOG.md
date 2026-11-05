@@ -41,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 🏎️ **Smoother moving between pages.**
+  - **Usage is counted once per chat:** the Agents dashboard and Agents & tasks no longer re-read every message of every task and sub-agent chat each time they refresh. A chat is only re-read after it changes, and a running turn always shows live numbers. Sub-agent chats are found with one lookup instead of one full scan per task.
+  - **Folders come back instantly:** a folder's Agents & tasks data is kept for 10 minutes after you leave it (was 30 seconds) and refreshes when you return. Folders you aren't looking at no longer refetch on every task event.
 - 💲 **No more "$0.00 spent" on the Agents dashboard.** That tile is now **Files changed**. Cost shows as a small line under Tokens, and only when there is some (local models and subscriptions report none). Tile labels are capitalised consistently.
 - 🚪 **Closing a task asks whether it's done.** **End task** is now **Close task**. It asks **Mark done** (the main choice: tasks waiting on it start, with its branch merged in) or **Abandon** (they're blocked), and names the tasks that are waiting. Abandoned tasks are labelled *Abandoned* instead of *Ended*. Previously, ending a finished task blocked everything that depended on it with *dependency_failed*.
 - ✅ **Mark a task done so the tasks waiting on it start.** **End task** means giving up on a task, so tasks that depend on it are blocked. Its confirmation wrongly said the task "moves to Done". There is now **Mark done**, on the task's page and on the dashboard: use it when the task's work is finished, even if it was merged outside Open Computer. A task that was ended by mistake has **Mark done instead**, and a task blocked by an ended dependency has **Mark <dependency> done**. The blocked task now names the dependency instead of showing *Conflict: dependency_failed*.

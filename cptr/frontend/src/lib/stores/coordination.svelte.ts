@@ -75,13 +75,17 @@ function empty(): CoordState {
 	};
 }
 
+/** How long a folder's state is kept after nothing shows it. */
+const CACHE_MS = 10 * 60_000;
+
 function ensureListener() {
 	if (listening) return;
 	listening = true;
 	socketStore.on('events:chat', (data: any) => {
 		const type = data?.type;
 		if (typeof type === 'string' && type.startsWith('coord:')) {
-			for (const root of Object.keys(entries)) schedule(root, 250);
+			// Only folders on screen refetch; a cached one refreshes when shown again.
+			for (const [root, entry] of Object.entries(entries)) if (entry.refs > 0) schedule(root, 250);
 			return;
 		}
 		if (type === 'chat:active' && data.chat_id) {
@@ -97,7 +101,7 @@ function ensureListener() {
 		}
 	});
 	socketStore.on('connect', () => {
-		for (const root of Object.keys(entries)) schedule(root, 100);
+		for (const [root, entry] of Object.entries(entries)) if (entry.refs > 0) schedule(root, 100);
 	});
 }
 
@@ -110,6 +114,9 @@ function schedule(root: string, delay: number) {
 		}
 		return;
 	}
+	// Not on screen: keep the cached state (and its eviction timer); it
+	// refreshes when shown again.
+	if (entry.refs <= 0) return;
 	if (entry.timer) clearTimeout(entry.timer);
 	entry.timer = setTimeout(() => {
 		entry.timer = null;
@@ -181,12 +188,12 @@ export function trackCoordination(root: string): () => void {
 				if (!entry) return;
 				entry.refs -= 1;
 				if (entry.refs > 0) return;
-				// Keep the cached state briefly so a remount (tab moved, pane split)
-				// shows data immediately instead of an empty list.
+				// Keep the cached state a while so coming back to this folder (or a
+				// remount: tab moved, pane split) shows it at once, then refreshes.
 				if (entry.timer) clearTimeout(entry.timer);
 				entry.timer = setTimeout(() => {
 					if (entries[root] && entries[root].refs <= 0) delete entries[root];
-				}, 30_000);
+				}, CACHE_MS);
 			});
 	});
 }
