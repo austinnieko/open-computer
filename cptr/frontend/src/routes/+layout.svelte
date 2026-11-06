@@ -40,7 +40,7 @@
 	import { setSession, clearSession, session } from '$lib/session';
 	import { getSession, getConfig } from '$lib/apis/auth';
 	import { fetchJSON } from '$lib/apis';
-	import { getGitConfig } from '$lib/apis/git';
+	import { getGitAvailable } from '$lib/apis/git';
 	import { gitStatusStore } from '$lib/stores/gitStatus.svelte';
 	import { t } from '$lib/i18n';
 	import {
@@ -180,6 +180,7 @@
 			if (authState !== 'authenticated') return;
 			if (away >= RELOAD_AFTER_MS && reloadApp('long absence')) return;
 			socketStore.reconnect();
+			systemEvents.reconnect();
 			armWatchdog();
 			checkForAppUpdate();
 			void refreshChatState(); // models or the default may have changed elsewhere
@@ -287,7 +288,8 @@
 					role: auth.role!,
 					profile_image_url: auth.profile_image_url
 				});
-				await refreshGitSettingsAvailability();
+				// Not awaited: the app must not wait on a subprocess to appear.
+				refreshGitSettingsAvailability();
 				authState = 'authenticated';
 				initState();
 				refreshChatState();
@@ -302,7 +304,8 @@
 				authState = cfg.needs_setup ? 'needs_setup' : 'needs_login';
 			}
 		} catch {
-			await refreshGitSettingsAvailability();
+			// Not awaited: the app must not wait on a subprocess to appear.
+			refreshGitSettingsAvailability();
 			authState = 'authenticated';
 			initState();
 			refreshChatState();
@@ -322,7 +325,8 @@
 					role: auth.role!,
 					profile_image_url: auth.profile_image_url
 				});
-				await refreshGitSettingsAvailability();
+				// Not awaited: the app must not wait on a subprocess to appear.
+				refreshGitSettingsAvailability();
 				authState = 'authenticated';
 				initState();
 				refreshChatState();
@@ -336,7 +340,7 @@
 
 	async function refreshGitSettingsAvailability() {
 		try {
-			gitSettingsAvailable = (await getGitConfig()).git.installed;
+			gitSettingsAvailable = (await getGitAvailable()).installed;
 		} catch {
 			gitSettingsAvailable = false;
 		}

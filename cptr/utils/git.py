@@ -14,6 +14,28 @@ from typing import Any
 from cptr.utils.identity import ExecutionIdentity, env_for, preexec_for
 
 
+# Generous: these only stop a git that will never finish.
+_LOCAL_TIMEOUT = 120.0
+_NETWORK_TIMEOUT = 600.0
+_NETWORK_COMMANDS = {"fetch", "pull", "push", "clone", "ls-remote", "submodule"}
+# Untracked files are read to count their lines; past these, skip the count.
+_COUNT_MAX_BYTES = 2_000_000
+_COUNT_MAX_FILES = 2_000
+
+
+def _subcommand(args: tuple[str, ...]) -> str:
+    """The git subcommand in args, skipping leading options like `-c key=value`."""
+    skip = False
+    for arg in args:
+        if skip:
+            skip = False
+        elif arg in ("-c", "-C"):
+            skip = True
+        elif not arg.startswith("-"):
+            return arg
+    return args[0] if args else ""
+
+
 async def _run(
     *args: str,
     cwd: str,
@@ -44,7 +66,20 @@ async def _run(
         if exc.filename != "git":
             raise
         raise GitError("Git is not installed", 127) from exc
-    stdout_bytes, stderr_bytes = await proc.communicate()
+    # A git that never exits (a stuck remote, a credential helper waiting on
+    # input, a lock) used to hang the request, and whatever was waiting on
+    # it, forever.
+    subcommand = _subcommand(args)
+    limit = _NETWORK_TIMEOUT if subcommand in _NETWORK_COMMANDS else _LOCAL_TIMEOUT
+    try:
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=limit)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        await proc.wait()
+        raise GitError(f"git {subcommand} timed out after {limit:.0f}s", 124)
     stdout = stdout_bytes.decode("utf-8", errors="replace")
     stderr = stderr_bytes.decode("utf-8", errors="replace")
     if check and proc.returncode != 0:
@@ -106,6 +141,7 @@ async def status(root: str, identity: ExecutionIdentity | None = None) -> dict[s
     behind = 0
     has_ab = False
     files_by_path: dict[str, dict[str, Any]] = {}
+    untracked: list[str] = []
 
     def add_file(
         path: str,
@@ -183,18 +219,26 @@ async def status(root: str, identity: ExecutionIdentity | None = None) -> dict[s
             # Untracked
             path = line[2:]
             add_file(path, "untracked", unstaged=True)
-            entry = files_by_path[path]
-            line_count = _count_text_lines(os.path.join(root, path))
-            if line_count is None:
-                entry["binary"] = True
-            else:
-                entry["additions"] = line_count
-                entry["deletions"] = 0
+            untracked.append(path)
         elif line.startswith("u "):
             # Unmerged
             parts = line.split(" ", 10)
             path = parts[-1]
             add_file(path, "conflict", unstaged=True)
+
+    # Reading untracked files to count lines is file I/O; keep it off the
+    # event loop, which serves every other request meanwhile.
+    if untracked:
+        counts = await asyncio.to_thread(
+            lambda: [_count_text_lines(os.path.join(root, p)) for p in untracked[:_COUNT_MAX_FILES]]
+        )
+        for path, line_count in zip(untracked, counts):
+            entry = files_by_path[path]
+            if line_count is None:
+                entry["binary"] = True
+            elif line_count >= 0:
+                entry["additions"] = line_count
+                entry["deletions"] = 0
 
     # upstream is set but remote branch doesn't exist yet (no ab line)
     # — treat as unpublished so the frontend shows "Publish"
@@ -233,7 +277,10 @@ def _status_char(c: str) -> str:
 
 
 def _count_text_lines(path: str) -> int | None:
+    """Lines in a text file; None if binary or unreadable, -1 if too big to count."""
     try:
+        if os.path.getsize(path) > _COUNT_MAX_BYTES:
+            return -1
         with open(path, "rb") as f:
             data = f.read()
     except OSError:

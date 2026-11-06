@@ -22,7 +22,9 @@
 	let failed = $state(false);
 	let hoverTurn = $state<number | null>(null);
 
+	let inFlight = false;
 	async function load(id: string) {
+		inFlight = true;
 		try {
 			const next = await getChatStats(id);
 			if (id === chatId) {
@@ -31,6 +33,8 @@
 			}
 		} catch {
 			if (id === chatId) failed = true;
+		} finally {
+			inFlight = false;
 		}
 	}
 
@@ -44,7 +48,11 @@
 		}
 		untrack(() => load(id));
 		if (!live) return;
-		const timer = setInterval(() => load(id), 3000);
+		// Skip a tick while the last request is still out, or the app is in the
+		// background, so a slow server doesn't collect a queue of these.
+		const timer = setInterval(() => {
+			if (!inFlight && !document.hidden) load(id);
+		}, 3000);
 		return () => {
 			clearInterval(timer);
 			untrack(() => load(id));

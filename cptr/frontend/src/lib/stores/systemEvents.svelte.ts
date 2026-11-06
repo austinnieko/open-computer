@@ -28,12 +28,20 @@ let _ports = $state<PortInfo[]>([]);
 let _newPorts = $state<PortInfo[]>([]);
 let _dismissedPorts = new Set<number>();
 
+// Retry delay after a drop: doubles up to a cap, reset once connected, so a
+// server that is down isn't hit every 2s forever.
+const RETRY_MIN_MS = 2000;
+const RETRY_MAX_MS = 30_000;
+let retryMs = RETRY_MIN_MS;
+
 function connect(watchPath: string) {
+	const samePath = watchPath === currentWatchPath;
 	currentWatchPath = watchPath;
 
 	if (ws && ws.readyState <= WebSocket.OPEN) {
-		// Already connected, just update watch path
-		if (ws.readyState === WebSocket.OPEN) {
+		// Already connected, just update watch path (the workspace store emits
+		// on every pane click, so skip it when the path hasn't changed).
+		if (ws.readyState === WebSocket.OPEN && !samePath) {
 			ws.send(JSON.stringify({ type: 'watch_path', path: watchPath }));
 		}
 		return;
@@ -43,6 +51,9 @@ function connect(watchPath: string) {
 	const url = `${protocol}//${location.host}/api/events/ws?path=${encodeURIComponent(watchPath)}`;
 
 	ws = new WebSocket(url);
+	ws.onopen = () => {
+		retryMs = RETRY_MIN_MS;
+	};
 
 	ws.onmessage = (event) => {
 		try {
@@ -74,15 +85,44 @@ function connect(watchPath: string) {
 
 	ws.onclose = () => {
 		ws = null;
-		if (reconnectTimer) clearTimeout(reconnectTimer);
-		reconnectTimer = setTimeout(() => {
-			if (currentWatchPath) connect(currentWatchPath);
-		}, 2000);
+		scheduleRetry();
 	};
 
 	ws.onerror = () => {
 		ws?.close();
 	};
+}
+
+function scheduleRetry() {
+	if (reconnectTimer) clearTimeout(reconnectTimer);
+	reconnectTimer = setTimeout(() => {
+		reconnectTimer = null;
+		if (!currentWatchPath) return;
+		// In the background, wait: reconnect() runs when the app comes back.
+		if (document.hidden) return;
+		connect(currentWatchPath);
+	}, retryMs);
+	retryMs = Math.min(retryMs * 2, RETRY_MAX_MS);
+}
+
+/**
+ * Replace the connection. After iOS suspends the app, the socket can still
+ * look open but be dead, so file and port updates silently stop.
+ */
+function reconnect() {
+	const path = currentWatchPath;
+	if (!path) return;
+	if (reconnectTimer) {
+		clearTimeout(reconnectTimer);
+		reconnectTimer = null;
+	}
+	if (ws) {
+		ws.onclose = null;
+		ws.close();
+		ws = null;
+	}
+	retryMs = RETRY_MIN_MS;
+	connect(path);
 }
 
 function disconnect() {
@@ -116,6 +156,7 @@ function dismissPort(port: number) {
 
 export const systemEvents = {
 	connect,
+	reconnect,
 	disconnect,
 	watchPath,
 

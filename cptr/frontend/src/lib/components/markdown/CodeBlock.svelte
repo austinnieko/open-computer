@@ -83,12 +83,36 @@
 		return highlighterPromise;
 	}
 
+	// Highlighting is synchronous and covers the whole block, so a block being
+	// streamed (new text many times a second) is highlighted at most every
+	// HIGHLIGHT_EVERY_MS, and a very large one is left as plain text: either
+	// would otherwise hold the main thread and freeze the page on a phone.
+	const HIGHLIGHT_EVERY_MS = 200;
+	const HIGHLIGHT_MAX_CHARS = 60_000;
+	let lastHighlight = 0;
+
 	// Highlight non-diff code: reactive so it re-runs on prop changes (streaming)
 	$effect(() => {
 		if (isDiff || !codeEl) return;
 		const currentCode = code;
 		const currentLang = language;
 
+		if (currentCode.length > HIGHLIGHT_MAX_CHARS) {
+			// Highlighting may have replaced the text node Svelte updates.
+			if (codeEl.textContent !== currentCode) codeEl.textContent = currentCode;
+			return;
+		}
+		const wait = Math.max(0, lastHighlight + HIGHLIGHT_EVERY_MS - performance.now());
+		if (wait === 0) {
+			highlight(currentCode, currentLang);
+			return;
+		}
+		const timer = setTimeout(() => highlight(currentCode, currentLang), wait);
+		return () => clearTimeout(timer);
+	});
+
+	function highlight(currentCode: string, currentLang: string | undefined) {
+		lastHighlight = performance.now();
 		(async () => {
 			try {
 				const hl = await getHighlighter();
@@ -126,7 +150,7 @@
 				// Fallback: just show plain text
 			}
 		})();
-	});
+	}
 
 	function handleCopy() {
 		navigator.clipboard.writeText(code);

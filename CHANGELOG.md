@@ -47,6 +47,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ⚡ **Faster and steadier, especially on iPhone.** These fixes come from a performance and stability audit:
+  - **No more freezing while a reply streams.** Text from the model is drawn at most once per frame instead of once per token. Code blocks are re-highlighted at most 5 times a second as they grow, and very large ones (over 60k characters) stay plain. On a 22k-character test reply, the longest freeze went from 10.9s to 1.4s and typical input delay from 634ms to 11ms.
+  - **The app opens without waiting on GitHub.** Startup used to wait for a `gh auth status` network check (about 0.9s, up to 10s when GitHub is slow) before drawing anything. It now asks a quick "is Git installed" endpoint and doesn't wait for the answer.
+  - **Background tabs stay quiet.**
+    - Only the chat on screen polls for command sessions, and not while the app is in the background. It used to be every open tab, every 5s.
+    - After the app resumes, only the chat on screen reloads; the others reload when you switch to them.
+    - The stats panel skips a poll while the previous one is still out.
+  - **The file-watch connection recovers after the phone sleeps,** and retries with backoff instead of every 2s.
+  - **A failed chat load says so** instead of leaving an empty pane.
+  - **Server:**
+    - Git commands time out (2 minutes, or 10 for fetch, pull and push) instead of hanging forever.
+    - Counting lines in untracked files no longer runs on the server's main thread, and files over 2MB are skipped.
+    - The port scan runs only when a terminal is open and is shared by all tabs.
+    - The once-a-second timer check filters in the database instead of loading every chat.
+    - SQLite waits up to 30s for a lock instead of failing with "database is locked" after 5s.
+    - The OpenCode version probe and the Stop button can no longer hang on an unresponsive OpenCode.
+
 - 🩹 **The iPhone app recovers by itself instead of needing to be closed.**
   - **Reloads when reconnecting fails:** if, 8 seconds after you come back, the live connection still isn't back but the server answers, the app reloads itself.
   - **Fresh start after a long absence:** after more than 30 minutes away, it reloads when you return.

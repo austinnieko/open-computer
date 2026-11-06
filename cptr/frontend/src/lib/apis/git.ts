@@ -164,6 +164,9 @@ export const createGitWorktree = (root: string, branch: string, path?: string) =
 export const getGitStashes = (root: string) =>
 	fetchJSON(`/api/git/stashes?root=${encodeURIComponent(root)}`);
 
+/** Cheap check for the app shell: is Git installed at all. */
+export const getGitAvailable = () => fetchJSON<{ installed: boolean }>('/api/git/available');
+
 export const getGitConfig = (root?: string) =>
 	fetchJSON<GitSettingsConfig>(`/api/git/config${root ? `?root=${encodeURIComponent(root)}` : ''}`);
 

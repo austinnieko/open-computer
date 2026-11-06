@@ -62,6 +62,12 @@ def is_pending_subagent_result_message(meta: dict | None) -> bool:
     )
 
 
+def _is_timer():
+    """Timer chats, filtered in SQL. The timer worker asks every second; loading
+    every chat with metadata to filter in Python grew with chat history."""
+    return func.json_extract(Chat.meta, "$.type") == "timer"
+
+
 class Chat(Base):
     """A chat conversation. Workspace association lives in the filesystem."""
 
@@ -98,7 +104,7 @@ class Chat(Base):
     async def get_due_timers(now_ns: int, limit: int = 10) -> list[Chat]:
         """Return pending internal timer chats whose due time has arrived."""
         async with await get_db() as db:
-            result = await db.execute(select(Chat).where(Chat.meta.is_not(None)))
+            result = await db.execute(select(Chat).where(_is_timer()))
             timers = [
                 chat
                 for chat in result.scalars().all()
@@ -114,7 +120,7 @@ class Chat(Base):
     async def get_pending_timers(parent_chat_id: str) -> list[Chat]:
         """Return pending timer children for a parent chat."""
         async with await get_db() as db:
-            result = await db.execute(select(Chat).where(Chat.meta.is_not(None)))
+            result = await db.execute(select(Chat).where(_is_timer()))
             return [
                 chat
                 for chat in result.scalars().all()

@@ -456,6 +456,19 @@
 		}
 	}
 
+	// A tab brought to the front catches up at once instead of on the next tick.
+	let wasActive = active;
+	$effect(() => {
+		if (active && !wasActive) {
+			refreshCommandSessions();
+			if (staleSinceReconnect && chatId) {
+				staleSinceReconnect = false;
+				loadChat(chatId);
+			}
+		}
+		wasActive = active;
+	});
+
 	$effect(() => {
 		if (chatId === commandSessionsChatId) return;
 		commandSessionsChatId = chatId;
@@ -490,6 +503,8 @@
 			const data = await getChat(id);
 			// Discard stale response if a newer loadChat was called while we waited
 			if (gen !== loadGeneration) return;
+			// The saved transcript replaces whatever text was still queued.
+			dropPendingDeltas();
 			allMessages = data.messages;
 			loadChatSettings(data.chat.meta);
 			coordTaskId =
@@ -511,6 +526,13 @@
 			}
 			loadedChatId = id;
 			updateChatStatuses([data.chat], workspace);
+		} catch (err: any) {
+			// Callers don't await this, so a failure here used to vanish as an
+			// unhandled rejection and leave an empty pane with no explanation.
+			if (gen !== loadGeneration) return;
+			console.error('[chat] load failed', err);
+			if (isInitialLoad) toast.error(err?.message || $t('chat.loadFailed'));
+			return;
 		} finally {
 			if (isInitialLoad && gen === loadGeneration) loading = false;
 		}
@@ -708,10 +730,11 @@
 		if (!msg) return;
 
 		if (data.delta) {
-			msg.content += data.delta;
-			allMessages = [...allMessages];
+			queueDelta(data.message_id, data.delta);
 			handleTtsDelta(data.message_id, data.delta);
 		}
+		// Anything else keeps its place after the text that came before it.
+		if (data.output || data.done) flushDeltas();
 		if (data.output) {
 			if (data.output.type === 'function_call') {
 				if (data.output.status === 'pending') stopTtsPlayback();
@@ -782,8 +805,39 @@
 		}
 	}
 
+	// Streamed text arrives a few characters at a time, often dozens of times a
+	// second. Each change re-parses the reply's whole Markdown, so text is
+	// applied at most once per frame instead of once per token.
+	const pendingDeltas = new Map<string, string>();
+	let deltaFrame = 0;
+	function queueDelta(messageId: string, delta: string) {
+		pendingDeltas.set(messageId, (pendingDeltas.get(messageId) ?? '') + delta);
+		if (!deltaFrame) deltaFrame = requestAnimationFrame(flushDeltas);
+	}
+	function flushDeltas() {
+		if (deltaFrame) cancelAnimationFrame(deltaFrame);
+		deltaFrame = 0;
+		if (!pendingDeltas.size) return;
+		for (const [id, text] of pendingDeltas) {
+			const target = allMessages.find((m) => m.id === id);
+			if (target) target.content += text;
+		}
+		pendingDeltas.clear();
+	}
+	function dropPendingDeltas() {
+		if (deltaFrame) cancelAnimationFrame(deltaFrame);
+		deltaFrame = 0;
+		pendingDeltas.clear();
+	}
+
+	// After a reconnect (the app coming back from the background, say) only the
+	// tab on screen reloads now; the others reload when you switch to them, so
+	// resuming with many tabs open doesn't fetch every transcript at once.
+	let staleSinceReconnect = false;
 	function handleReconnect() {
-		if (chatId) loadChat(chatId);
+		if (!chatId) return;
+		if (active) loadChat(chatId);
+		else staleSinceReconnect = true;
 	}
 
 	// A new, empty chat follows the current default model, also when the model
@@ -850,7 +904,11 @@
 			loadPreviousChats();
 		}
 		refreshCommandSessions();
-		commandSessionsTimer = setInterval(refreshCommandSessions, 5000);
+		// Every open tab keeps a ChatPanel mounted; only the one on screen polls,
+		// and not while the app is in the background.
+		commandSessionsTimer = setInterval(() => {
+			if (active && !document.hidden) refreshCommandSessions();
+		}, 5000);
 		window.addEventListener('computer:inspectCommandSession', handleInspectCommandSession);
 
 		const offChat = socketStore.on('events:chat', handleSocketEvent);
@@ -862,6 +920,7 @@
 	});
 
 	onDestroy(() => {
+		dropPendingDeltas();
 		stopTtsPlayback();
 		unbindSocketListeners?.();
 		unbindSocketListeners = null;
@@ -1237,12 +1296,16 @@
 		}
 	}
 
+	let commandSessionsInFlight = false;
 	async function refreshCommandSessions() {
 		const currentChatId = chatId;
 		if (!currentChatId || !workspace) {
 			commandSessions = [];
 			return;
 		}
+		// A slow server must not pile up overlapping polls.
+		if (commandSessionsInFlight) return;
+		commandSessionsInFlight = true;
 		try {
 			const sessions = await listCommandSessions(workspace, currentChatId);
 			if (chatId !== currentChatId) return;
@@ -1250,6 +1313,8 @@
 		} catch (err) {
 			console.error('[chat] command sessions refresh error', err);
 			if (chatId === currentChatId) commandSessions = [];
+		} finally {
+			commandSessionsInFlight = false;
 		}
 	}
 

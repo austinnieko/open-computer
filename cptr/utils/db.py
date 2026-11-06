@@ -17,6 +17,9 @@ def get_engine():
         _engine = create_async_engine(
             f"sqlite+aiosqlite:///{DB_FILE}",
             echo=False,
+            # Several agents finishing at once all write; wait for the lock
+            # rather than failing with "database is locked" after the 5s default.
+            connect_args={"timeout": 30},
         )
     return _engine
 

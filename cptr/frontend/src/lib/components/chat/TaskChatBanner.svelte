@@ -39,7 +39,9 @@
 			const result = await getCoordTask(id);
 			if (id === taskId) task = result.task;
 		} catch {
-			task = null; // not ours, deleted, or no access: show nothing
+			// Not ours, deleted, or no access: show nothing (unless the banner has
+			// moved on to another task meanwhile).
+			if (id === taskId) task = null;
 		}
 	}
 
