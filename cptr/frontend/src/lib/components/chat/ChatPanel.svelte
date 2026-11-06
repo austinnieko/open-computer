@@ -786,6 +786,18 @@
 		if (chatId) loadChat(chatId);
 	}
 
+	// A new, empty chat follows the current default model, also when the model
+	// list or the default arrives after it opened, or the default changes. Once
+	// you pick a model in it (or it has messages), it keeps that choice.
+	let autoModel = '';
+	$effect(() => {
+		const next = $defaultModel || $chatModels[0]?.id || '';
+		if (chatId || hasChatContent || !next) return;
+		const untouched = !selectedModel || selectedModel === autoModel;
+		autoModel = next;
+		if (untouched && selectedModel !== next) selectedModel = next;
+	});
+
 	function resetChatSettings() {
 		const models = get(chatModels);
 		const dm = get(defaultModel);
