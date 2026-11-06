@@ -223,6 +223,10 @@ export interface RegisterTaskBody {
 	test_command?: string;
 	/** False keeps a task with instructions as a Draft until Start is clicked. */
 	start_now?: boolean;
+	/** The new chat starts in plan mode: the agent plans and waits for approval. */
+	plan_mode?: boolean;
+	/** The new chat follows edits: each file the agent edits opens beside it. */
+	follow_edits?: boolean;
 }
 
 export const startCoordTask = (id: string, body: { prompt?: string; model_id?: string } = {}) =>
