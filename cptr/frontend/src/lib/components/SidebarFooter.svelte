@@ -85,6 +85,12 @@
 				icon: 'external-link',
 				onclick: () => window.open(FEATURE_REQUEST_URL, '_blank', 'noopener,noreferrer')
 			},
+			{
+				// The installed iPhone app has no browser reload button.
+				label: $t('sidebar.reload'),
+				icon: 'refresh',
+				onclick: () => window.location.reload()
+			},
 			{ divider: true, label: '', onclick: () => {} },
 			{ label: $t('sidebar.logOut'), icon: 'log-out', onclick: clearSession }
 		]}
