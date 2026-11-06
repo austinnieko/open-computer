@@ -63,6 +63,29 @@
 	let swRegistration: ServiceWorkerRegistration | null = null;
 	let lastUpdateCheck = 0;
 
+	/** Text typed but not sent anywhere on the page (a reload would lose it). */
+	function hasUnsentText(): boolean {
+		for (const el of document.querySelectorAll(
+			'textarea, input[type="text"], [contenteditable="true"]'
+		)) {
+			const value =
+				el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement
+					? el.value
+					: (el.textContent ?? '');
+			if (value.trim()) return true;
+		}
+		return false;
+	}
+
+	/** Reload the app (the installed iPhone app has no reload button). Skipped,
+	 * returning false, when it would throw away something you're typing. */
+	function reloadApp(reason: string): boolean {
+		if (hasUnsentText()) return false;
+		console.info(`[cptr] reloading: ${reason}`);
+		window.location.reload();
+		return true;
+	}
+
 	/** Ask the server for a newer app version (throttled). An installed app that
 	 * is only ever suspended and resumed would otherwise never check. */
 	function checkForAppUpdate(minGapMs = 10 * 60_000) {
@@ -132,9 +155,32 @@
 		// so reconnect, which makes every view refetch, and check for an update.
 		let hiddenAt = document.visibilityState === 'hidden' ? Date.now() : 0;
 		const RESUME_AFTER_MS = 3000;
-		const resume = () => {
+		// After a long absence a fresh start is more reliable than patching up.
+		const RELOAD_AFTER_MS = 30 * 60_000;
+		// How long a reconnect may take before the app reloads itself.
+		const WATCHDOG_MS = 8000;
+		let watchdog: ReturnType<typeof setTimeout> | null = null;
+		const visible = () => document.visibilityState === 'visible';
+		const armWatchdog = () => {
+			if (watchdog) clearTimeout(watchdog);
+			watchdog = setTimeout(async () => {
+				watchdog = null;
+				if (!visible() || !navigator.onLine || socketStore.connected) return;
+				// Still not connected. If the server answers, the app itself is
+				// stuck (a dead socket or a wedged page): reload it. If the server
+				// doesn't answer, it's the network or the server: the offline
+				// notice covers that, and reloading wouldn't help.
+				const serverUp = await fetch('/api/health', { cache: 'no-store' })
+					.then((r) => r.ok)
+					.catch(() => false);
+				if (serverUp && !socketStore.connected) reloadApp('reconnect failed');
+			}, WATCHDOG_MS);
+		};
+		const resume = (away = 0) => {
 			if (authState !== 'authenticated') return;
+			if (away >= RELOAD_AFTER_MS && reloadApp('long absence')) return;
 			socketStore.reconnect();
+			armWatchdog();
 			checkForAppUpdate();
 			void refreshChatState(); // models or the default may have changed elsewhere
 		};
@@ -145,10 +191,10 @@
 			}
 			const away = hiddenAt ? Date.now() - hiddenAt : 0;
 			hiddenAt = 0;
-			if (away >= RESUME_AFTER_MS || !socketStore.connected) resume();
+			if (away >= RESUME_AFTER_MS || !socketStore.connected) resume(away);
 		};
 		const onPageShow = (event: PageTransitionEvent) => {
-			if (event.persisted) resume(); // restored from the back/forward cache
+			if (event.persisted) resume(RESUME_AFTER_MS); // restored from the back/forward cache
 		};
 		const onOnline = () => resume();
 		document.addEventListener('visibilitychange', onVisibility);
@@ -167,6 +213,7 @@
 		return () => {
 			clearInterval(healthCheck);
 			clearInterval(updateTimer);
+			if (watchdog) clearTimeout(watchdog);
 			document.removeEventListener('visibilitychange', onVisibility);
 			window.removeEventListener('pageshow', onPageShow);
 			window.removeEventListener('online', onOnline);

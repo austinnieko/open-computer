@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 🩹 **The iPhone app recovers by itself instead of needing to be closed.**
+  - **Reloads when reconnecting fails:** if, 8 seconds after you come back, the live connection still isn't back but the server answers, the app reloads itself.
+  - **Fresh start after a long absence:** after more than 30 minutes away, it reloads when you return.
+  - **No more endless waiting:** a data request that gets no answer in 45 seconds gives up, so a screen can't wait forever on a request iOS froze while the app was in the background.
+  - **A Reload item** in the account menu (bottom of the sidebar), since the installed app has no browser reload button.
+  - An automatic reload never happens while you have text typed in a message box.
 - 🤖 **New chats use the default model you just set.** Changing the default in **Settings → Models** only took effect after a full reload, which an installed iPhone app rarely does, so new chats kept the old model. The default is now reloaded as soon as you save it, and whenever the app comes back to the foreground (in case it was changed on another device). An empty new chat follows the current default, also when the model list loads after it opened, until you pick a model for it. Chats that already have messages keep their model.
 - 📱 **The iPhone app no longer goes stale after you switch away.**
   - **Reconnects when you come back:** iOS suspends a home-screen app, and its live connection can die without the app knowing, so for up to ~45 seconds nothing updated. Now, coming back after more than 3 seconds (or when the network returns), Open Computer reconnects right away and every view reloads: the open chat, the sidebar's chat lists, Agents and Agents & tasks.

@@ -47,6 +47,7 @@
 	"sidebar.settings": "Settings",
 	"sidebar.suggestFeature": "Feedback",
 	"sidebar.admin": "Admin",
+	"sidebar.reload": "Reload",
 	"sidebar.logOut": "Log out",
 	"sidebar.remove": "Remove",
 	"sidebar.workspaceOptions": "Workspace options",

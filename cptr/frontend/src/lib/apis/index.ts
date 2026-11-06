@@ -18,9 +18,23 @@ export async function fetchHandler(path: string, init?: RequestInit): Promise<Re
 	return res;
 }
 
-/** fetch() + JSON parse. Throws ApiError on non-2xx. */
+/** A read that hasn't answered by now never will (say iOS suspended the app
+ * mid-request): give up so the screen can show an error or retry instead of
+ * waiting forever. Writes are left alone (they may legitimately take long). */
+const READ_TIMEOUT_MS = 45_000;
+
+/** fetch() + JSON parse. Throws ApiError on non-2xx; API reads time out. */
 export async function fetchJSON<T = unknown>(path: string, init?: RequestInit): Promise<T> {
-	const res = await fetchHandler(path, init);
+	// API reads only: file downloads (previews) can legitimately take longer.
+	const method = (init?.method || 'GET').toUpperCase();
+	const timed =
+		!init?.signal &&
+		method === 'GET' &&
+		typeof AbortSignal !== 'undefined' &&
+		'timeout' in AbortSignal
+			? { ...init, signal: AbortSignal.timeout(READ_TIMEOUT_MS) }
+			: init;
+	const res = await fetchHandler(path, timed);
 	if (!res.ok) {
 		const data = await res.json().catch(() => ({}));
 		throw new ApiError(res.status, data.detail || data.error || data.message || res.statusText);
