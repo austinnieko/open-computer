@@ -13,7 +13,8 @@
 		"format:frontend": "prettier --write .",
 		"format:check:frontend": "prettier --check .",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"test:unit": "node --test tests/"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^7.0.1",

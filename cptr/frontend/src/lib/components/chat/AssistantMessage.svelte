@@ -5,6 +5,7 @@
 	import OutputEditView from './OutputEditView.svelte';
 	import ChatFilePreview from './ChatFilePreview.svelte';
 	import ConsecutiveActivityGroup from './ConsecutiveActivityGroup.svelte';
+	import { classify, normalizeCall, redact } from '$lib/utils/agentActivity';
 	import MessageTimestamp from './MessageTimestamp.svelte';
 	import ReasoningCollapsible from './ReasoningCollapsible.svelte';
 	import SubagentCard from './SubagentCard.svelte';
@@ -172,6 +173,21 @@
 		if (path) openFileTab(path);
 	}
 
+	/** A coding agent's step, described by what it did: "npm test", "Read App.svelte". */
+	function agentToolLabel(args: any): string {
+		const call = normalizeCall({ name: 'agent_tool', arguments: args });
+		const { kind, detail } = classify(call);
+		if (call.title && kind !== 'subagent') return redact(call.title);
+		if (kind === 'subagent') return `Sub-agent: ${detail}`;
+		if (['read', 'read_tests', 'write'].includes(kind) && detail) {
+			const verb = kind === 'write' ? (call.tool.startsWith('write') ? 'Write' : 'Edit') : 'Read';
+			return `${verb} ${detail}`;
+		}
+		if (kind === 'plan') return 'Updated the plan';
+		if (detail && detail !== call.tool) return detail;
+		return call.tool ? call.tool[0].toUpperCase() + call.tool.slice(1) : 'Agent tool';
+	}
+
 	/** Human-readable label for a tool call */
 	function toolLabel(name: string, args: any): string {
 		const _t = $t;
@@ -234,7 +250,7 @@
 				return `${label}: "${t.length > 60 ? t.slice(0, 60) + '…' : t}"`;
 			}
 			case 'agent_tool':
-				return args.title || 'Agent tool';
+				return agentToolLabel(args);
 			default: {
 				// External tool: {server_id}_{tool_name} → "tool_name (server_id)"
 				const idx = name.indexOf('_');

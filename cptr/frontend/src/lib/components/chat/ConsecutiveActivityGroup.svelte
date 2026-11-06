@@ -5,6 +5,7 @@
 	import { expandToolDetails } from '$lib/stores';
 	import ReasoningCollapsible from './ReasoningCollapsible.svelte';
 	import ToolCallCollapsible from './ToolCallCollapsible.svelte';
+	import { buildRuns, currentRun, summarizeRuns, type ActivityRun } from '$lib/utils/agentActivity';
 
 	interface Props {
 		entries: any[];
@@ -75,11 +76,6 @@
 		);
 	}
 
-	let expanded = $state($expandToolDetails);
-	$effect(() => {
-		expanded = $expandToolDetails;
-	});
-
 	const hasReasoningPending = $derived(
 		reasoning.some((ri: any) => ri.status === 'in_progress' || ri.status === 'running')
 	);
@@ -87,23 +83,59 @@
 		(!done && calls.some((c: any) => !['completed', 'failed', 'rejected'].includes(c.status))) ||
 			hasReasoningPending
 	);
+	// Open while something in this block is running, so its steps can be followed
+	// live; folds once they're done, unless the user opened or closed it themselves.
+	let userChoice = $state<boolean | null>(null);
+	const expanded = $derived(userChoice ?? ($expandToolDetails || hasPending));
+	$effect(() => {
+		$expandToolDetails;
+		userChoice = null;
+	});
 	const allDone = $derived(
 		(calls.length === 0 || calls.every((c: any) => ['completed', 'failed'].includes(c.status))) &&
 			!hasReasoningPending
 	);
 	const hasRejected = $derived(calls.some((c: any) => c.status === 'rejected'));
-	const hasError = $derived(
-		calls.some(
+	// The block as readable steps (see $lib/utils/agentActivity).
+	const runs = $derived(buildRuns(entries, outputs, done));
+	// Failed calls, for the count; the icon turns red only when a step ended in
+	// failure (a test that failed and then passed on retry is not an error).
+	const failedCalls = $derived(
+		calls.filter(
 			(c: any) => c.status === 'failed' || isToolResultError(outputs.get(c.call_id)?.output ?? '')
-		)
+		).length
+	);
+	const hasError = $derived(
+		runs.length > 1 ? runs.some((r) => r.status === 'failed') : failedCalls > 0
 	);
 	const pendingCalls = $derived(calls.filter((c: any) => c.status === 'pending'));
 	const hasPendingApproval = $derived(pendingCalls.length > 0);
 	const isThoughtOnly = $derived(calls.length === 0);
-	const summaryText = $derived.by(() => groupSummaryText(calls));
+	const summaryText = $derived.by(() =>
+		hasPending && activeRun
+			? activeRun.latest && activeRun.kind !== 'subagent' && activeRun.kind !== 'plan'
+				? `${activeRun.label} · ${activeRun.latest}`
+				: activeRun.label
+			: summarizeRuns(runs) || groupSummaryText(calls)
+	);
 
 	function toggleExpanded() {
-		expanded = !expanded;
+		userChoice = !expanded;
+	}
+
+	// ── Runs: the block as readable steps ──────────────────────
+	const activeRun = $derived(currentRun(runs));
+	let openRuns = $state<Set<number>>(new Set());
+	function toggleRun(i: number) {
+		const next = new Set(openRuns);
+		if (next.has(i)) next.delete(i);
+		else next.add(i);
+		openRuns = next;
+	}
+	function duration(run: ActivityRun): string {
+		if (run.startedAt === undefined || run.endedAt === undefined) return '';
+		const s = Math.max(0, Math.round((run.endedAt - run.startedAt) / 1000));
+		return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 	}
 
 	function groupSummaryText(groupCalls: any[]): string {
@@ -247,17 +279,20 @@
 			{/if}
 
 			<div class="flex-1 min-w-0 line-clamp-1">
-				<span class="text-gray-600 dark:text-gray-300">
-					{isThoughtOnly
-						? hasPending
-							? $t('chat.thinking')
-							: $t('chat.edit.thought')
-						: hasPending
-							? $t('chat.exploring')
-							: $t('chat.explored')}
-				</span>
-				{#if !isThoughtOnly && summaryText}
-					<span class="text-gray-400 dark:text-gray-500 ml-1">{summaryText}</span>
+				{#if isThoughtOnly}
+					<span class="text-gray-600 dark:text-gray-300">
+						{hasPending ? $t('chat.thinking') : $t('chat.edit.thought')}
+					</span>
+				{:else}
+					<span class="text-gray-600 dark:text-gray-300">{summaryText}</span>
+					<span class="text-gray-400 dark:text-gray-500 ml-1"
+						>· {$t('chat.activity.operations', { count: calls.length })}</span
+					>
+					{#if failedCalls}
+						<span class="ml-1 text-red-500 dark:text-red-400"
+							>· {$t('chat.activity.failed', { count: failedCalls })}</span
+						>
+					{/if}
 				{/if}
 			</div>
 
@@ -278,23 +313,107 @@
 
 	{#if expanded}
 		<div transition:slide={{ duration: 300, easing: quintOut, axis: 'y' }}>
-			<div class="mb-0.5 space-y-0.5 mt-1">
-				{#each entries as item, entryIdx}
-					{#if item.type === 'reasoning'}
-						<ReasoningCollapsible {item} fallbackId={`reasoning-${groupIdx}-${entryIdx}`} />
-					{:else}
-						<ToolCallCollapsible
-							{item}
-							pairedOutput={outputs.get(item.call_id)}
-							{done}
-							{chatId}
-							{messageId}
-							{toolLabel}
-							{onapprove}
-						/>
-					{/if}
-				{/each}
-			</div>
+			{#snippet rawEntries(list: any[], prefix: string)}
+				<div class="mb-0.5 space-y-0.5 mt-1">
+					{#each list as item, entryIdx}
+						{#if item.type === 'reasoning'}
+							<ReasoningCollapsible
+								{item}
+								fallbackId={`reasoning-${groupIdx}-${prefix}-${entryIdx}`}
+							/>
+						{:else}
+							<ToolCallCollapsible
+								{item}
+								pairedOutput={outputs.get(item.call_id)}
+								{done}
+								{chatId}
+								{messageId}
+								{toolLabel}
+								{onapprove}
+							/>
+						{/if}
+					{/each}
+				</div>
+			{/snippet}
+			{#if runs.length <= 1 || isThoughtOnly}
+				{@render rawEntries(entries, 'all')}
+			{:else}
+				<!-- One row per step; each opens to its exact tool calls and results. -->
+				<ol class="activity-runs mt-1 mb-0.5">
+					{#each runs as run, i (i)}
+						{@const open = openRuns.has(i)}
+						<li class="activity-run" data-status={run.status}>
+							<button
+								class="flex w-full min-w-0 items-center gap-2 rounded-md py-1 pr-1 text-left text-[0.8125rem] transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
+								aria-expanded={open}
+								onclick={() => toggleRun(i)}
+							>
+								<span class="run-mark" aria-hidden="true">
+									{#if run.status === 'active'}
+										<span class="run-dot-live"></span>
+									{:else if run.status === 'approval'}
+										<span class="text-amber-500">⏸</span>
+									{:else if run.status === 'failed'}
+										<span class="text-red-500">✕</span>
+									{:else if run.kind === 'thinking'}
+										<span class="text-gray-400">·</span>
+									{:else}
+										<span class="text-emerald-500">✓</span>
+									{/if}
+								</span>
+								<span
+									class="shrink-0 {run.status === 'active'
+										? 'text-gray-800 dark:text-gray-100'
+										: run.status === 'failed'
+											? 'text-red-600 dark:text-red-400'
+											: run.status === 'approval'
+												? 'text-amber-700 dark:text-amber-300'
+												: 'text-gray-600 dark:text-gray-300'}"
+									>{run.status === 'approval' ? $t('chat.activity.approval') : run.label}</span
+								>
+								{#if run.calls.length > 1}
+									<span class="shrink-0 text-[0.6875rem] text-gray-400"
+										>{$t('chat.activity.operations', { count: run.calls.length })}</span
+									>
+								{/if}
+								{#if run.failed}
+									<span class="shrink-0 text-[0.6875rem] text-red-500"
+										>{$t('chat.activity.failed', { count: run.failed })}</span
+									>
+								{/if}
+								{#if run.latest && run.kind !== 'subagent' && run.kind !== 'plan'}
+									<span class="min-w-0 truncate font-mono text-[0.6875rem] text-gray-400"
+										>{run.latest}</span
+									>
+								{/if}
+								<span class="ml-auto shrink-0 text-[0.6875rem] tabular-nums text-gray-400"
+									>{duration(run)}</span
+								>
+								{#if run.entries.length}
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke-width="3"
+										stroke="currentColor"
+										class="size-2.5 shrink-0 text-gray-400 transition-transform duration-150 {open
+											? 'rotate-180'
+											: ''}"
+										><path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											d="m19.5 8.25-7.5 7.5-7.5-7.5"
+										/></svg
+									>
+								{/if}
+							</button>
+							{#if open}
+								<div class="pl-5">{@render rawEntries(run.entries, String(i))}</div>
+							{/if}
+						</li>
+					{/each}
+				</ol>
+			{/if}
 		</div>
 	{/if}
 
@@ -327,3 +446,41 @@
 		</div>
 	{/if}
 </div>
+
+<style>
+	.activity-runs {
+		position: relative;
+		margin-left: 0.4375rem;
+		padding-left: 0.5rem;
+		border-left: 1px solid color-mix(in oklab, var(--app-fg) 10%, transparent);
+	}
+	.run-mark {
+		display: inline-flex;
+		width: 0.875rem;
+		justify-content: center;
+		flex-shrink: 0;
+		font-size: 0.75rem;
+		line-height: 1;
+	}
+	.run-dot-live {
+		width: 0.5rem;
+		height: 0.5rem;
+		border-radius: 9999px;
+		background: rgb(59 130 246);
+		box-shadow: 0 0 0 0 rgb(59 130 246 / 0.5);
+		animation: run-pulse 1.4s ease-out infinite;
+	}
+	@keyframes run-pulse {
+		0% {
+			box-shadow: 0 0 0 0 rgb(59 130 246 / 0.5);
+		}
+		100% {
+			box-shadow: 0 0 0 6px rgb(59 130 246 / 0);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.run-dot-live {
+			animation: none;
+		}
+	}
+</style>
