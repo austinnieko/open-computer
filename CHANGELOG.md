@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 📡 **Live agent progress.** Long agent runs no longer read as "Thought, Shell, Shell, Thought…".
+  - **Readable steps in the chat:** an agent's tool calls are grouped by what they did. Five `ls`/`tree` calls become *Inspected repository structure · 5 operations*. There's also *Searched the codebase*, *Ran tests · 2 operations · 1 failed*, *Made code changes*, *Reviewer sub-agent: …* and so on, in order. Unrelated work is never merged. Each step opens to its exact commands and results.
+  - **While it runs,** the step in progress is shown with what it's doing (*Running tests · `npm test`*). Finished blocks fold into a one-line summary.
+  - **A live panel above the message box** shows the reply's status (*Working*, *Thinking*, *Approval required*), elapsed time, and what it's doing now. The checklist is the agent's own todo list when it keeps one (OpenCode's todowrite), otherwise its latest steps. Running sub-agents are named.
+  - Everything is built from the agent's real steps (OpenCode 1.x and 2.x, and Open Computer's own tools). Nothing is invented or marked done early, and reasoning stays in *Thought*. Tokens and passwords are masked in the summaries.
 - 🗺️ **Plan mode and Follow edits in New task.** Turn either on when creating a task: the task's chat starts with it set, as if you had switched it on in the message box's + menu. With Plan mode, the agent's first turn (including one started automatically) plans and waits for your approval before changing files. Switch it off in the chat's + menu to let it build.
 - 🧹 **Clear finished tasks in one go.** **Clear finished · N** next to *Show completed* on a folder's Agents & tasks page removes its done and abandoned tasks from the list and the Agents dashboard. Their branches (with commits) and chats are kept. You can also have it delete their worktree folders; a folder with uncommitted changes is kept, and you're told which. A finished task that a not-yet-started task depends on stays, because that task merges its work in when it starts.
 - 📱 **Better on iPhone (Safari and the home-screen app).** On touch screens only, so the desktop layout is unchanged:

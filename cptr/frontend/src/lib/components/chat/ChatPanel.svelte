@@ -37,6 +37,7 @@
 	import { trackSubagents } from '$lib/stores/subagents.svelte';
 	import { setFollowEdits, watchChatEdits } from '$lib/stores/followEdits.svelte';
 	import AgentsPanel from './AgentsPanel.svelte';
+	import LiveProgress from './LiveProgress.svelte';
 	import TaskChatBanner from './TaskChatBanner.svelte';
 	import ChatStatsPanel from './ChatStatsPanel.svelte';
 	import { chatStatsOn } from '$lib/stores/chatStats';
@@ -323,6 +324,11 @@
 	const visiblePath = $derived(
 		hasHiddenMessages ? activePath.slice(activePath.length - visibleCount) : activePath
 	);
+	// The reply still being generated, if the latest one is (for LiveProgress).
+	const liveMessage = $derived.by(() => {
+		const last = visiblePath.at(-1)?.msg;
+		return last && last.role === 'assistant' && !last.done ? last : null;
+	});
 
 	let loadSentinelEl: HTMLDivElement;
 	let loadObserver: IntersectionObserver | null = null;
@@ -2036,6 +2042,7 @@
 						</button>
 					</div>
 				{/if}
+				<LiveProgress message={liveMessage} title={chatTitle} />
 				<AgentsPanel {chatId} />
 				<ChatInput
 					bind:this={chatInputEl}
