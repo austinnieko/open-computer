@@ -504,8 +504,65 @@ class ApiVersionTests(unittest.IsolatedAsyncioTestCase):
     async def test_v2_json_is_v2(self):
         import httpx
 
-        version = await self._detect(lambda r: httpx.Response(200, json={"data": {}}))
-        self.assertEqual(version, opencode_v2.API_V2)
+        def handler(request):
+            if request.url.path == "/api/session/active":
+                return httpx.Response(200, json={"data": {}})
+            return httpx.Response(200, headers={"content-type": "text/html"}, text=WEB_UI)
+
+        self.assertEqual(await self._detect(handler), opencode_v2.API_V2)
+
+    async def test_dual_protocol_server_uses_the_native_api(self):
+        # OpenCode 1.19.x: native /session routes *and* /api routes, both live.
+        import httpx
+
+        spec = {
+            "openapi": "3.1.0",
+            "paths": {
+                "/session": {},
+                "/session/{sessionID}/prompt_async": {},
+                "/event": {},
+                "/api/session/active": {},
+                "/api/session/{sessionID}/prompt": {},
+            },
+        }
+
+        def handler(request):
+            if request.url.path == "/doc":
+                return httpx.Response(200, json=spec)
+            return httpx.Response(200, json={"data": {}})  # /api/session/active answers too
+
+        self.assertEqual(await self._detect(handler), opencode_v2.API_V1)
+
+    async def test_dual_protocol_without_doc_is_detected_by_native_status(self):
+        import httpx
+
+        def handler(request):
+            if request.url.path == "/session/status":
+                return httpx.Response(200, json={})
+            if request.url.path == "/api/session/active":
+                return httpx.Response(200, json={"data": {}})
+            return httpx.Response(200, headers={"content-type": "text/html"}, text=WEB_UI)
+
+        self.assertEqual(await self._detect(handler), opencode_v2.API_V1)
+
+    async def test_doc_advertising_only_api_routes_is_v2(self):
+        import httpx
+
+        def handler(request):
+            if request.url.path == "/doc":
+                return httpx.Response(200, json={"paths": {"/api/session": {}, "/api/event": {}}})
+            return httpx.Response(200, headers={"content-type": "text/html"}, text=WEB_UI)
+
+        self.assertEqual(await self._detect(handler), opencode_v2.API_V2)
+
+    async def test_doc_requiring_auth_reports_the_password_problem(self):
+        import httpx
+
+        def handler(request):
+            return httpx.Response(401, json={"message": "Unauthorized"})
+
+        with self.assertRaises(opencode_v2.OpenCodeAuthError):
+            await self._detect(handler)
 
 
 class PermissionNoticeTests(unittest.TestCase):

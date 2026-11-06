@@ -987,6 +987,8 @@ def _message_dict(m) -> dict:
         d["content"] = live["content"]
         d["output"] = live["output"]
         d["done"] = False
+        if live.get("agent_status"):
+            d["agent_status"] = live["agent_status"]
     return d
 
 

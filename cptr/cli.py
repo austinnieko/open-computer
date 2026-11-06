@@ -44,6 +44,52 @@ def run(host: str, port: int, reload: bool, headless: bool):
     )
 
 
+@cli.command("migrate-paths")
+@click.option(
+    "--map",
+    "maps",
+    multiple=True,
+    metavar="OLD=NEW",
+    help="Path prefix to move, e.g. /home/admin=/home/austin/spark-repos/worktree-backup/home/admin. "
+    "Repeatable; the longest matching prefix wins.",
+)
+@click.option("--apply", "do_apply", is_flag=True, help="Write the changes (after a backup).")
+@click.option(
+    "--allow-missing",
+    is_flag=True,
+    help="Also rewrite values whose new path does not exist on this machine.",
+)
+@click.option("--db", "db_path", default=None, help="Database file (default: the app's).")
+@click.option("--report", "report_path", default=None, help="Also write the report as JSON.")
+def migrate_paths(maps, do_apply, allow_missing, db_path, report_path):
+    """Move stored workspace and worktree paths to a new location.
+
+    Dry run unless --apply. Without --map, lists stored paths that no longer
+    exist. Never moves, deletes or prunes files or worktrees on disk.
+    """
+    import json as _json
+
+    from cptr.env import DB_FILE
+    from cptr.utils import path_migration
+
+    try:
+        mappings = [path_migration.Mapping.parse(m) for m in maps]
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--map")
+    db = db_path or str(DB_FILE)
+    if do_apply and not mappings:
+        raise click.UsageError("--apply needs at least one --map")
+    if do_apply:
+        report = path_migration.apply(db, mappings, allow_missing=allow_missing)
+    else:
+        report = path_migration.plan(db, mappings)
+    click.echo(report.summary(allow_missing=allow_missing))
+    if report_path:
+        with open(report_path, "w") as fh:
+            _json.dump(report.to_dict(), fh, indent=2)
+        click.echo(f"\nReport: {report_path}")
+
+
 def main():
     cli()
 

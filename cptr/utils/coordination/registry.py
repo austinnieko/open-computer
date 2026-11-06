@@ -61,6 +61,10 @@ class CoordinationError(Exception):
     pass
 
 
+class TaskWorktreeMissing(CoordinationError):
+    """A task chat's own worktree is gone; it must not run anywhere else."""
+
+
 def repo_lock(repo_key: str) -> asyncio.Lock:
     return _repo_locks.setdefault(repo_key, asyncio.Lock())
 
@@ -198,7 +202,26 @@ async def register_task(
         if chat_id:
             await bind_chat(task.id, chat_id)
         refreshed = await CoordTask.get_by_id(task.id)
-        return {"task": refreshed.to_dict(), "reused": False, "worktree": worktree}
+        result = {"task": refreshed.to_dict(), "reused": False, "worktree": worktree}
+        if isolate and not await _gh_installed(identity):
+            # Not blocking: the work can run; only opening its PR needs gh.
+            result["warnings"] = [
+                "The GitHub CLI (gh) isn't installed for the user Open Computer runs as. The "
+                "task can run, but opening its pull request will fail until gh is installed "
+                "and signed in."
+            ]
+        return result
+
+
+async def _gh_installed(identity: ExecutionIdentity | None) -> bool:
+    from cptr.utils import gh
+
+    try:
+        if identity is not None:
+            return bool(await gh.version(identity))
+        return gh._gh_path() is not None
+    except Exception:  # noqa: BLE001 - a check, never a reason to fail registration
+        return True
 
 
 async def _base_branch(
@@ -310,8 +333,20 @@ async def resolve_chat_cwd(
     if not await wt.is_worktree_of(
         task.worktree_path, wt.RepoIdentity(task.repo_key, task.repo_root), identity
     ):
+        # This chat genuinely belongs to the task, but its worktree is gone or
+        # no longer part of the repository (e.g. a path from another machine
+        # after a migration). Falling back to the chat's workspace would run
+        # the task's agent in the main checkout, so stop instead.
         logger.warning("[coord] worktree %s for %s is missing or foreign", cwd, task_id)
-        return None
+        where = "doesn't exist" if not os.path.isdir(task.worktree_path) else (
+            "is no longer a worktree of " + task.repo_root
+        )
+        raise TaskWorktreeMissing(
+            f"This task's worktree {task.worktree_path} {where}, so the agent was not "
+            "started (it would otherwise run in the main checkout). If the folder moved, "
+            "run `cptr migrate-paths --map OLD=NEW` to point the task at its new location; "
+            "nothing was deleted."
+        )
     return os.path.realpath(task.worktree_path)
 
 

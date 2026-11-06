@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import os
 import re
 import secrets
@@ -17,14 +16,14 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from cptr.utils.agents import opencode_v2
+from cptr.utils.agents import opencode_v1, opencode_v2
 from cptr.utils.agents.attachments import PreparedAgentAttachments
 from cptr.utils.agents.events import (
     AgentDone,
     AgentError,
     AgentEvent,
+    AgentSessionStarted,
     AgentTextDelta,
-    AgentToolUpdate,
 )
 from cptr.utils.agents.opencode_v2 import OpenCodeError
 from cptr.utils.agents.prompts import turn_prompt_text
@@ -187,20 +186,10 @@ async def _request(
     headers: dict[str, str],
     json_body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    last_error: Exception | None = None
-    for path in paths:
-        try:
-            response = await client.request(method, f"/{path}", headers=headers, json=json_body)
-            response.raise_for_status()
-            if not response.content:
-                return {}
-            data = response.json()
-            return data if isinstance(data, dict) else {}
-        except Exception as exc:  # noqa: BLE001 - try alternate generated route names.
-            last_error = exc
-    if last_error:
-        raise last_error
-    return {}
+    """First served route of ``paths``; see :func:`opencode_v1.request`."""
+    return await opencode_v1.request_dict(
+        client, method, paths, headers=headers, json_body=json_body
+    )
 
 
 def _session_data(payload: dict[str, Any]) -> dict[str, Any]:
@@ -282,98 +271,6 @@ async def _start_opencode_prompt(
     )
 
 
-def _role_update_from_event(event: dict[str, Any]) -> tuple[str, str] | None:
-    if event.get("type") != "message.updated":
-        return None
-    props = event.get("properties") if isinstance(event.get("properties"), dict) else {}
-    info = props.get("info") if isinstance(props.get("info"), dict) else {}
-    message_id = info.get("id")
-    role = info.get("role")
-    if isinstance(message_id, str) and isinstance(role, str):
-        return message_id, role
-    return None
-
-
-def _text_from_event(
-    event: dict[str, Any],
-    emitted: dict[str, str],
-    message_roles: dict[str, str],
-) -> str | None:
-    event_type = event.get("type")
-    props = event.get("properties") if isinstance(event.get("properties"), dict) else {}
-    if event_type == "message.part.delta":
-        message_id = props.get("messageID")
-        if isinstance(message_id, str) and message_roles.get(message_id) == "user":
-            return None
-        delta = props.get("delta")
-        part_id = props.get("partID")
-        if isinstance(part_id, str) and isinstance(delta, str):
-            emitted[part_id] = f"{emitted.get(part_id, '')}{delta}"
-        return delta if isinstance(delta, str) and delta else None
-    if event_type == "message.part.updated":
-        part = props.get("part") if isinstance(props.get("part"), dict) else {}
-        if part.get("type") not in ("text", "reasoning"):
-            return None
-        message_id = part.get("messageID")
-        if isinstance(message_id, str) and message_roles.get(message_id) == "user":
-            return None
-        part_id = part.get("id")
-        text = part.get("text")
-        if not isinstance(part_id, str) or not isinstance(text, str):
-            return None
-        previous = emitted.get(part_id, "")
-        if text.startswith(previous):
-            delta = text[len(previous) :]
-        else:
-            delta = text
-        emitted[part_id] = text
-        return delta or None
-    return None
-
-
-def _tool_from_event(event: dict[str, Any]) -> AgentToolUpdate | None:
-    if event.get("type") != "message.part.updated":
-        return None
-    props = event.get("properties") if isinstance(event.get("properties"), dict) else {}
-    part = props.get("part") if isinstance(props.get("part"), dict) else {}
-    if part.get("type") != "tool":
-        return None
-    call_id = part.get("callID") or part.get("id")
-    if not isinstance(call_id, str) or not call_id.strip():
-        return None
-    state = part.get("state") if isinstance(part.get("state"), dict) else {}
-    tool = str(part.get("tool") or state.get("title") or "Agent tool").strip()
-    status = _opencode_tool_status(state.get("status"))
-    output = _opencode_tool_output(state)
-    return AgentToolUpdate(
-        call_id=call_id.strip(),
-        name="agent_tool",
-        status=status,
-        arguments={"title": tool, **({"state": state} if state else {})},
-        output=output,
-    )
-
-
-def _opencode_tool_status(value: Any) -> str:
-    normalized = str(value or "").strip().lower()
-    if normalized == "completed":
-        return "completed"
-    if normalized == "error":
-        return "failed"
-    if normalized == "pending":
-        return "pending"
-    return "in_progress"
-
-
-def _opencode_tool_output(state: dict[str, Any]) -> str | None:
-    for key in ("output", "result", "message", "error"):
-        value = state.get(key)
-        if value is None:
-            continue
-        return value if isinstance(value, str) else json.dumps(value, indent=2)
-    return None
-
-
 async def run_opencode_agent(
     *,
     profile: dict[str, Any],
@@ -428,103 +325,18 @@ async def run_opencode_agent(
                         # this an external server runs every session in its own
                         # startup cwd instead of the chat's (task) directory.
                         headers = {**headers, **_directory_header(workspace)}
-                        session_id = _resume_session_id(resume_state)
-                        resumed = bool(session_id)
-                        if session_id is None:
-                            session_id = await _create_opencode_session(client, headers)
-
-                        parsed_model = _parse_model(model)
-                        while True:
-                            emitted: dict[str, str] = {}
-                            event_queue: asyncio.Queue[AgentEvent | object | None] = asyncio.Queue()
-                            event_task = asyncio.create_task(
-                                _collect_opencode_events(
-                                    client, headers, session_id, emitted, event_queue
-                                )
-                            )
-
-                            prompt = turn_prompt_text(messages, system_prompt, resumed=resumed)
-                            parts = _opencode_parts(prompt, attachments)
-                            try:
-                                try:
-                                    await _start_opencode_prompt(
-                                        client, headers, session_id, parsed_model, parts
-                                    )
-                                except Exception:
-                                    if not resumed:
-                                        raise
-                                    event_task.cancel()
-                                    with suppress(asyncio.CancelledError):
-                                        await event_task
-                                    session_id = await _create_opencode_session(client, headers)
-                                    resumed = False
-                                    continue
-
-                                last_activity = asyncio.get_running_loop().time()
-                                while True:
-                                    try:
-                                        item = await asyncio.wait_for(event_queue.get(), timeout=1)
-                                    except asyncio.TimeoutError:
-                                        with suppress(Exception):
-                                            payload = await asyncio.wait_for(
-                                                _request(
-                                                    client,
-                                                    "GET",
-                                                    ["session/status", "session.status"],
-                                                    headers=headers,
-                                                ),
-                                                timeout=5,
-                                            )
-                                            status = _session_data(payload).get(session_id)
-                                            if (
-                                                not isinstance(status, dict)
-                                                or status.get("type") == "idle"
-                                            ):
-                                                break
-                                        if asyncio.get_running_loop().time() - last_activity >= 600:
-                                            raise RuntimeError(
-                                                "OpenCode stopped sending events for 10 minutes."
-                                            )
-                                        continue
-                                    if item is _OPENCODE_ACTIVITY:
-                                        last_activity = asyncio.get_running_loop().time()
-                                        continue
-                                    if item is None:
-                                        break
-                                    last_activity = asyncio.get_running_loop().time()
-                                    yield item
-                            except asyncio.CancelledError:
-                                # Bounded, so Stop can't hang on an unresponsive server.
-                                with suppress(Exception):
-                                    await asyncio.wait_for(
-                                        _request(
-                                            client,
-                                            "POST",
-                                            [
-                                                f"session/{session_id}/abort",
-                                                "session.abort",
-                                                "session/abort",
-                                            ],
-                                            headers=headers,
-                                            json_body={"sessionID": session_id},
-                                        ),
-                                        timeout=5,
-                                    )
-                                raise
-                            finally:
-                                event_task.cancel()
-                                with suppress(asyncio.CancelledError):
-                                    await event_task
-                            break
-
-                        yield AgentDone(
-                            resume_state={
-                                "profile_id": profile["id"],
-                                "session_id": session_id,
-                                "workspace": workspace,
-                                "model": model,
-                            }
-                        )
+                        async for event in _run_v1(
+                            client,
+                            headers,
+                            profile=profile,
+                            model=model,
+                            workspace=workspace,
+                            messages=messages,
+                            system_prompt=system_prompt,
+                            resume_state=resume_state,
+                            attachments=attachments,
+                        ):
+                            yield event
                     return
                 except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
                     last_connect_error = exc
@@ -550,59 +362,97 @@ async def run_opencode_agent(
         yield AgentError(str(exc))
 
 
-async def _collect_opencode_events(
+async def _still_busy(client: httpx.AsyncClient, headers: dict[str, str], session_id: str) -> bool:
+    try:
+        return (
+            await asyncio.wait_for(opencode_v1.session_status(client, headers, session_id), 10)
+        ) is not None
+    except OpenCodeError:
+        raise
+    except Exception:  # noqa: BLE001 - unknown: don't block the turn on it.
+        return False
+
+
+def _resume_state(profile, session_id, workspace, model) -> dict[str, Any]:
+    return {
+        "profile_id": profile["id"],
+        "session_id": session_id,
+        "workspace": workspace,
+        "model": model,
+    }
+
+
+async def _run_v1(
     client: httpx.AsyncClient,
     headers: dict[str, str],
-    session_id: str,
-    emitted: dict[str, str],
-    queue: asyncio.Queue[AgentEvent | object | None],
-) -> None:
-    message_roles: dict[str, str] = {}
+    *,
+    profile: dict[str, Any],
+    model: str,
+    workspace: str,
+    messages: list[dict[str, Any]],
+    system_prompt: str,
+    resume_state: dict[str, Any] | None,
+    attachments: PreparedAgentAttachments,
+) -> AsyncIterator[AgentEvent]:
+    """One OpenCode 1.x turn (see :mod:`opencode_v1` for the recovery rules)."""
+    parsed_model = _parse_model(model)
+    session_id = _resume_session_id(resume_state)
+    if session_id and not await opencode_v1.session_exists(client, headers, session_id):
+        # Gone (e.g. OpenCode's data was reset): start fresh rather than fail.
+        session_id = None
+    resumed = bool(session_id)
+    if session_id is None:
+        session_id = await _create_opencode_session(client, headers)
+        # Saved before any work starts, so a restart can't orphan it.
+        yield AgentSessionStarted(_resume_state(profile, session_id, workspace, model))
+
+    prompt = turn_prompt_text(messages, system_prompt, resumed=resumed)
+    parts = _opencode_parts(prompt, attachments)
+
+    async def send_prompt() -> None:
+        # Sent exactly once. A failure here is reported, never retried in a
+        # new session: the server may already have accepted the prompt.
+        await _start_opencode_prompt(client, headers, session_id, parsed_model, parts)
+
+    async def attach() -> None:
+        return None
+
     try:
-        for path in ("event.subscribe", "event/subscribe", "event"):
-            try:
-                async with client.stream("GET", f"/{path}", headers=headers) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if not line:
-                            continue
-                        if line.startswith("data:"):
-                            line = line[5:].strip()
-                        with suppress(Exception):
-                            event = json.loads(line)
-                            if not isinstance(event, dict):
-                                continue
-                            props = (
-                                event.get("properties")
-                                if isinstance(event.get("properties"), dict)
-                                else {}
-                            )
-                            if props.get("sessionID") != session_id:
-                                continue
-                            await queue.put(_OPENCODE_ACTIVITY)
-                            role_update = _role_update_from_event(event)
-                            if role_update:
-                                message_roles[role_update[0]] = role_update[1]
-                            text = _text_from_event(event, emitted, message_roles)
-                            if text:
-                                await queue.put(AgentTextDelta(text))
-                            tool = _tool_from_event(event)
-                            if tool:
-                                await queue.put(tool)
-                            status = (
-                                props.get("status") if isinstance(props.get("status"), dict) else {}
-                            )
-                            if (
-                                event.get("type") == "session.status"
-                                and status.get("type") == "idle"
-                            ):
-                                await queue.put(None)
-                                return
-            except Exception:
-                continue
-    except Exception:
-        await queue.put(None)
-    await queue.put(None)
+        if resumed and await _still_busy(client, headers, session_id):
+            # The previous turn is still running in OpenCode (e.g. Open
+            # Computer restarted mid-turn). Follow it to the end instead of
+            # starting parallel work in the same session and folder, then
+            # send this message.
+            yield AgentTextDelta(
+                "⏳ OpenCode is still working on the previous request in this session; "
+                "following it, and this message will be sent when it finishes.\n\n"
+            )
+            async for event in opencode_v1.run_turn(
+                client, headers, session_id, attach, attached=True
+            ):
+                yield event
+        async for event in opencode_v1.run_turn(client, headers, session_id, send_prompt):
+            yield event
+    except asyncio.CancelledError:
+        # Bounded, so Stop can't hang on an unresponsive server.
+        with suppress(Exception):
+            await asyncio.wait_for(
+                _request(
+                    client,
+                    "POST",
+                    [f"session/{session_id}/abort", "session.abort", "session/abort"],
+                    headers=headers,
+                    json_body={"sessionID": session_id},
+                ),
+                timeout=5,
+            )
+        raise
+    except OpenCodeError as exc:
+        # Keep the session: the next message continues it instead of
+        # starting the work over in a new one.
+        yield AgentError(str(exc), resume_state=_resume_state(profile, session_id, workspace, model))
+        return
+    yield AgentDone(resume_state=_resume_state(profile, session_id, workspace, model))
 
 
 # ── OpenCode 2.x ───────────────────────────────────────────────────────────
