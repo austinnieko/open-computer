@@ -77,6 +77,10 @@ class RegisterTaskRequest(BaseModel):
     create_chat: bool = False
     # False keeps a task with instructions as a Draft until the user clicks Start.
     start_now: bool = True
+    # Chat settings for the new task chat (create_chat), like the message box's:
+    # plan first and wait for approval; open each edited file as the agent works.
+    plan_mode: bool = False
+    follow_edits: bool = False
 
 
 class StartTaskRequest(BaseModel):
@@ -585,6 +589,16 @@ async def register(request: Request, body: RegisterTaskRequest):
         meta = {"workspace": origin}
         if body.model_id:
             meta["last_model"] = body.model_id
+        # Saved where the message box keeps them: every turn (the scheduler's
+        # first one included) reads plan mode from here, and the chat opens
+        # with both toggles set.
+        params = {
+            key: True
+            for key, on in (("plan_mode", body.plan_mode), ("follow_edits", body.follow_edits))
+            if on
+        }
+        if params:
+            meta["params"] = params
         chat = await Chat.create(user_id, body.title.strip()[:120], meta=meta, created_at=now_ms())
         body.chat_id = chat.id
         await _ensure_chat_file(request, origin, chat.id)

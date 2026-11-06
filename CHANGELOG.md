@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 🗺️ **Plan mode and Follow edits in New task.** Turn either on when creating a task: the task's chat starts with it set, as if you had switched it on in the message box's + menu. With Plan mode, the agent's first turn (including one started automatically) plans and waits for your approval before changing files. Switch it off in the chat's + menu to let it build.
 - 🧹 **Clear finished tasks in one go.** **Clear finished · N** next to *Show completed* on a folder's Agents & tasks page removes its done and abandoned tasks from the list and the Agents dashboard. Their branches (with commits) and chats are kept. You can also have it delete their worktree folders; a folder with uncommitted changes is kept, and you're told which. A finished task that a not-yet-started task depends on stays, because that task merges its work in when it starts.
 - 📱 **Better on iPhone (Safari and the home-screen app).** On touch screens only, so the desktop layout is unchanged:
   - **Thumb-sized controls:** sidebar rows are 40px tall; dashboard and row buttons are 32–36px (were 20–28px).

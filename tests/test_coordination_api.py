@@ -533,3 +533,24 @@ class MarkDoneRouteTests(ApiTestCase):
 
         await coordinator.CoordinationEventSink().handle_event(_Ev())
         await self._assert_dependent_starts(a, b)
+
+
+class NewTaskChatSettingsTests(ApiTestCase):
+    """New task's Plan mode / Follow edits land where the message box keeps them."""
+
+    async def test_plan_mode_and_follow_edits_are_saved_on_the_new_chat(self):
+        from cptr.models.chats import Chat
+
+        body = {"root": str(self.repo), "title": "Planned", "create_chat": True, "model_id": "m"}
+        task = (await self.post("/tasks", {**body, "plan_mode": True, "follow_edits": True})).json()
+        chat = await Chat.get_by_id(task["task"]["chat_id"])
+        self.assertEqual(chat.meta["params"], {"plan_mode": True, "follow_edits": True})
+        self.assertEqual(chat.meta["last_model"], "m")
+
+    async def test_off_by_default_and_nothing_extra_is_saved(self):
+        from cptr.models.chats import Chat
+
+        body = {"root": str(self.repo), "title": "Plain", "create_chat": True, "model_id": "m"}
+        task = (await self.post("/tasks", body)).json()
+        chat = await Chat.get_by_id(task["task"]["chat_id"])
+        self.assertNotIn("params", chat.meta)
