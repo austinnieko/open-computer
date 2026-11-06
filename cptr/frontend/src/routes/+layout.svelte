@@ -136,6 +136,7 @@
 			if (authState !== 'authenticated') return;
 			socketStore.reconnect();
 			checkForAppUpdate();
+			void refreshChatState(); // models or the default may have changed elsewhere
 		};
 		const onVisibility = () => {
 			if (document.visibilityState === 'hidden') {

@@ -345,6 +345,8 @@ Files:
 			models.forEach((m) => (m.dirty = false));
 
 			await updateConfig({ 'chat.default_model': defaultModelId });
+			// New chats read the default from this store: reload it now, not at next launch.
+			await refreshChatState();
 
 			toast.success($t('settings.saved'));
 		} catch {
