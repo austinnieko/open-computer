@@ -142,7 +142,7 @@
 			{background ? 'Background sub-agent' : 'Sub-agent'}
 		</span>
 		<span
-			class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium {statusClass[
+			class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.6875rem] font-medium {statusClass[
 				status
 			]}"
 		>
@@ -163,7 +163,7 @@
 
 	<!-- Main → sub-agent -->
 	<div class="px-3 pb-2">
-		<div class="app-muted mb-0.5 text-[11px] font-medium tracking-wide uppercase">
+		<div class="app-muted mb-0.5 text-[0.6875rem] font-medium tracking-wide uppercase">
 			Main agent → sub-agent
 		</div>
 		<div
@@ -205,7 +205,7 @@
 	<!-- Sub-agent → main -->
 	{#if result}
 		<div class="border-t px-3 pt-2 pb-2">
-			<div class="app-muted mb-0.5 text-[11px] font-medium tracking-wide uppercase">
+			<div class="app-muted mb-0.5 text-[0.6875rem] font-medium tracking-wide uppercase">
 				Sub-agent → main agent
 			</div>
 			<div class={showFullResult ? '' : 'max-h-28 overflow-hidden'}>

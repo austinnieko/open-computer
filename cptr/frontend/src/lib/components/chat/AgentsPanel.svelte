@@ -99,6 +99,8 @@
 	});
 
 	const LANE = 30;
+	// Layout in rem so the timeline follows the UI Scale setting.
+	const rem = (px: number) => `${px / 16}rem`;
 </script>
 
 {#if agents.length > 0}
@@ -123,7 +125,7 @@
 					>{/if}
 			</button>
 			{#if open}
-				<div class="flex rounded-full border p-0.5 text-[11px]">
+				<div class="flex rounded-full border p-0.5 text-[0.6875rem]">
 					{#each [['list', 'List'], ['timeline', 'Timeline']] as [key, label] (key)}
 						<button
 							type="button"
@@ -160,7 +162,7 @@
 							<span class="flex items-center gap-1.5">
 								<span class="app-muted shrink-0">Agent {i + 1}</span>
 								{#if agent.mode === 'background'}
-									<span class="app-muted shrink-0 rounded border px-1 text-[10px]">background</span>
+									<span class="app-muted shrink-0 rounded border px-1 text-[0.625rem]">background</span>
 								{/if}
 								<span class="truncate text-gray-800 dark:text-gray-200"
 									>{short(agent.task, 120)}</span
@@ -179,14 +181,14 @@
 		{#if open && view === 'timeline'}
 			<div class="px-3.5 pb-3">
 				<!-- Swimlanes: main agent on top, one lane per sub-agent -->
-				<div class="relative text-[11px]" style="height: {(agents.length + 1) * LANE}px">
+				<div class="relative text-[0.6875rem]" style="height: {rem((agents.length + 1) * LANE)}">
 					<div class="absolute inset-y-0 left-0 w-20">
-						<div class="app-muted flex items-center font-medium" style="height: {LANE}px">Main</div>
+						<div class="app-muted flex items-center font-medium" style="height: {rem(LANE)}">Main</div>
 						{#each agents as agent, i (agent.chat_id)}
 							<button
 								type="button"
 								class="app-muted flex w-full items-center truncate text-left hover:text-gray-700 dark:hover:text-gray-300"
-								style="height: {LANE}px"
+								style="height: {rem(LANE)}"
 								title={agent.task}
 								onclick={() => jumpTo(agent)}
 							>
@@ -198,7 +200,7 @@
 						<!-- Main lane -->
 						<div
 							class="absolute inset-x-0 rounded-full bg-gray-400/25"
-							style="top: {LANE / 2 - 2}px; height: 4px"
+							style="top: {rem(LANE / 2 - 2)}; height: 0.25rem"
 						></div>
 						{#each agents as agent, i (agent.chat_id)}
 							{@const top = (i + 1) * LANE}
@@ -207,20 +209,20 @@
 							<!-- Handoff: main → agent -->
 							<div
 								class="absolute border-l border-dashed border-gray-400/70"
-								style="left: {left}%; top: {LANE / 2}px; height: {top}px"
+								style="left: {left}%; top: {rem(LANE / 2)}; height: {rem(top)}"
 								title={`Main → Agent ${i + 1} at ${clock(startOf(agent))}: ${short(agent.task, 200)}`}
 							></div>
 							<div
 								class="absolute size-2 -translate-x-1/2 rounded-full bg-gray-500"
-								style="left: {left}%; top: {LANE / 2 - 4}px"
+								style="left: {left}%; top: {rem(LANE / 2 - 4)}"
 							></div>
 							<!-- Agent's working span -->
 							<button
 								type="button"
 								class="absolute rounded-full {barColor[agent.status]} hover:opacity-80"
-								style="left: {left}%; width: max(6px, {right - left}%); top: {top +
+								style="left: {left}%; width: max(0.375rem, {right - left}%); top: {rem(top +
 									LANE / 2 -
-									5}px; height: 10px"
+									5)}; height: 0.625rem"
 								title={`Agent ${i + 1}: ${short(agent.task, 200)}\n${describeActivity(agent)} · ${formatElapsed(endOf(agent) - startOf(agent))}`}
 								aria-label={`Agent ${i + 1} timeline`}
 								onclick={() => jumpTo(agent)}
@@ -231,20 +233,20 @@
 									class="absolute border-l border-dashed {agent.status === 'done'
 										? 'border-emerald-500/70'
 										: 'border-red-500/70'}"
-									style="left: {right}%; top: {LANE / 2}px; height: {top}px"
+									style="left: {right}%; top: {rem(LANE / 2)}; height: {rem(top)}"
 									title={`Agent ${i + 1} → Main at ${clock(endOf(agent))}: ${short(agent.result || agent.status, 200)}`}
 								></div>
 								<div
 									class="absolute size-2 -translate-x-1/2 rounded-full {agent.status === 'done'
 										? 'bg-emerald-500'
 										: 'bg-red-500'}"
-									style="left: {right}%; top: {LANE / 2 - 4}px"
+									style="left: {right}%; top: {rem(LANE / 2 - 4)}"
 								></div>
 							{/if}
 						{/each}
 					</div>
 				</div>
-				<div class="app-muted mt-1 flex justify-between pl-20 text-[10px] tabular-nums">
+				<div class="app-muted mt-1 flex justify-between pl-20 text-[0.625rem] tabular-nums">
 					<span>{clock(range.start)}</span>
 					<span>{clock(range.start + range.span)}</span>
 				</div>
