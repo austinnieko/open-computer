@@ -25,6 +25,11 @@
 		type ChatTask
 	} from '$lib/apis/chat';
 	import {
+		applyReasoningDelta,
+		mergeReasoningDelta,
+		type ReasoningDelta
+	} from '$lib/utils/reasoningStream';
+	import {
 		chatModels,
 		defaultModel,
 		setChatReadAt,
@@ -641,6 +646,7 @@
 		chat_id: string;
 		message_id?: string;
 		delta?: string;
+		reasoning_delta?: ReasoningDelta;
 		output?: any;
 		agent_status?: AgentRunStatus;
 		tasks?: ChatTask[];
@@ -741,6 +747,7 @@
 			queueDelta(data.message_id, data.delta);
 			handleTtsDelta(data.message_id, data.delta);
 		}
+		if (data.reasoning_delta) queueReasoningDelta(data.message_id, data.reasoning_delta);
 		// Anything else keeps its place after the text that came before it.
 		if (data.output || data.done) flushDeltas();
 		if (data.output) {
@@ -817,25 +824,39 @@
 	// second. Each change re-parses the reply's whole Markdown, so text is
 	// applied at most once per frame instead of once per token.
 	const pendingDeltas = new Map<string, string>();
+	// Reasoning arrives the same way, as new text plus the offset it starts at
+	// (keyed by message, then reasoning item).
+	const pendingReasoning = new Map<string, Map<string, ReasoningDelta>>();
 	let deltaFrame = 0;
 	function queueDelta(messageId: string, delta: string) {
 		pendingDeltas.set(messageId, (pendingDeltas.get(messageId) ?? '') + delta);
 		if (!deltaFrame) deltaFrame = requestAnimationFrame(flushDeltas);
 	}
+	function queueReasoningDelta(messageId: string, delta: ReasoningDelta) {
+		let items = pendingReasoning.get(messageId);
+		if (!items) pendingReasoning.set(messageId, (items = new Map()));
+		items.set(delta.id, mergeReasoningDelta(items.get(delta.id), delta));
+		if (!deltaFrame) deltaFrame = requestAnimationFrame(flushDeltas);
+	}
 	function flushDeltas() {
 		if (deltaFrame) cancelAnimationFrame(deltaFrame);
 		deltaFrame = 0;
-		if (!pendingDeltas.size) return;
 		for (const [id, text] of pendingDeltas) {
 			const target = allMessages.find((m) => m.id === id);
 			if (target) target.content += text;
 		}
 		pendingDeltas.clear();
+		for (const [id, items] of pendingReasoning) {
+			const target = allMessages.find((m) => m.id === id);
+			for (const delta of items.values()) if (target) applyReasoningDelta(target.output, delta);
+		}
+		pendingReasoning.clear();
 	}
 	function dropPendingDeltas() {
 		if (deltaFrame) cancelAnimationFrame(deltaFrame);
 		deltaFrame = 0;
 		pendingDeltas.clear();
+		pendingReasoning.clear();
 	}
 
 	// After a reconnect (the app coming back from the background, say) only the
