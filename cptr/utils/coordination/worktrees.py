@@ -27,6 +27,45 @@ class WorktreeError(Exception):
     """A worktree operation was refused or failed."""
 
 
+# Untracked folders where coding agents keep their own state (plans, memory,
+# sessions). Often git-ignored, so `git worktree remove` would delete them
+# without counting them as changes; a worktree holding one is never removed.
+AGENT_STATE_DIRS = (".omo", ".opencode", ".claude", ".codex", ".cursor", ".agents", ".aider")
+
+
+def agent_state_dirs(path: str) -> list[str]:
+    return [d for d in AGENT_STATE_DIRS if os.path.isdir(os.path.join(path, d))]
+
+
+async def uses_lfs(repo_root: str, identity: ExecutionIdentity | None = None) -> bool:
+    """True when the repository's attributes route files through Git LFS."""
+    for name in (".gitattributes", os.path.join(".git", "info", "attributes")):
+        try:
+            with open(os.path.join(repo_root, name), encoding="utf-8", errors="replace") as fh:
+                if "filter=lfs" in fh.read():
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+async def lfs_available(repo_root: str, identity: ExecutionIdentity | None = None) -> bool:
+    code, _, _ = await _run("lfs", "version", cwd=repo_root, check=False, identity=identity)
+    return code == 0
+
+
+async def preflight(repo_root: str, identity: ExecutionIdentity | None = None) -> list[str]:
+    """Problems that would make creating a task worktree fail half-way."""
+    problems: list[str] = []
+    if await uses_lfs(repo_root, identity) and not await lfs_available(repo_root, identity):
+        problems.append(
+            "This repository stores files with Git LFS, but git-lfs isn't available to the "
+            "user Open Computer runs as. Install it (e.g. `sudo apt install git-lfs`, then "
+            "`git lfs install`) and retry; nothing was created."
+        )
+    return problems
+
+
 @dataclass(frozen=True)
 class RepoIdentity:
     key: str  # realpath of the shared git dir; identical for every worktree
@@ -164,7 +203,23 @@ async def ensure_worktree(
     for item in await list_worktrees(repo.main_root, identity):
         if item.get("branch") != branch:
             continue
-        existing = os.path.realpath(item["path"])
+        registered = item["path"]
+        if not os.path.isdir(registered):
+            # Git still lists the branch at a folder that is gone, typically a
+            # path from before a migration. Nothing is pruned automatically:
+            # the folder may only have moved.
+            hint = (
+                f"If the worktree now lives at {path}, run `git worktree repair {path}` in "
+                f"{repo.main_root}."
+                if os.path.isdir(path)
+                else f"If it moved, run `git worktree repair <new path>` in {repo.main_root}; "
+                f"if it is really gone, `git worktree prune` there clears the stale entry."
+            )
+            raise WorktreeError(
+                f"Branch {branch!r} is registered to a worktree at {registered}, which doesn't "
+                f"exist. {hint} Nothing was changed."
+            )
+        existing = os.path.realpath(registered)
         if existing == path or is_within(existing, managed_root(repo.main_root)):
             return {"path": existing, "branch": branch, "reused": True, "created_branch": False}
         raise WorktreeError(
@@ -175,10 +230,22 @@ async def ensure_worktree(
     if os.path.exists(path):
         if os.path.isdir(path) and not os.listdir(path):
             os.rmdir(path)  # empty leftover from a failed create; safe to replace
+        elif os.path.isfile(os.path.join(path, ".git")):
+            # A worktree checkout git no longer knows about (moved or copied
+            # from another machine): its link can be repaired, not recreated.
+            raise WorktreeError(
+                f"{path} is a worktree checkout that git doesn't have registered (moved or "
+                f"copied from elsewhere). Run `git worktree repair {path}` in {repo.main_root} "
+                "and retry; nothing was changed."
+            )
         else:
             raise WorktreeError(
                 f"{path} exists and is not a worktree for branch {branch!r}; leaving it untouched"
             )
+
+    problems = await preflight(repo.main_root, identity)
+    if problems:
+        raise WorktreeError(" ".join(problems))
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
     exists = await branch_exists(repo.main_root, branch, identity)
@@ -242,10 +309,19 @@ async def remove_worktree(
     path = validate_task_path(repo.main_root, path)
     state = await worktree_state(path, identity)
     if not state.get("exists"):
-        await _run("worktree", "prune", cwd=repo.main_root, identity=identity)
+        # Forget only this worktree's stale entry. `git worktree prune` would
+        # drop every missing worktree of the repository, including ones that
+        # merely moved (e.g. after a migration) and could still be repaired.
+        await _run("worktree", "remove", path, cwd=repo.main_root, check=False, identity=identity)
         return
     if state.get("dirty") or state.get("error"):
         raise WorktreeError(f"{path} has uncommitted changes; refusing to remove it")
+    kept = agent_state_dirs(path)
+    if kept:
+        raise WorktreeError(
+            f"{path} holds agent state ({', '.join(kept)}) that git doesn't track and "
+            "removing the worktree would delete; move or delete it first"
+        )
     try:
         await _run("worktree", "remove", path, cwd=repo.main_root, identity=identity)
     except GitError as exc:

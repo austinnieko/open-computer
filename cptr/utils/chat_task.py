@@ -68,6 +68,8 @@ from cptr.utils.agents.events import (
     AgentDone,
     AgentError,
     AgentReasoningDelta,
+    AgentSessionStarted,
+    AgentStatus,
     AgentTextDelta,
     AgentToolOutputDelta,
     AgentToolUpdate,
@@ -1658,9 +1660,15 @@ async def run_chat_task(
         _sync_state()
         return item
 
+    agent_status: dict | None = None
+
     def _sync_state():
         """Update in-memory state so API can serve it on refresh."""
-        _task_state[message_id] = {"content": content, "output": output_items}
+        _task_state[message_id] = {
+            "content": content,
+            "output": output_items,
+            "agent_status": agent_status,
+        }
 
     async def _save_message(save_reason: str, **kwargs) -> bool:
         """Persist a message update and log enough detail to debug skipped saves."""
@@ -1726,7 +1734,7 @@ async def run_chat_task(
 
     async def _run_agent_target(agent_target: AgentModelTarget):
         nonlocal content, text_buffer, task_completed_success, skill_authoring_allowed
-        nonlocal skill_create_requested
+        nonlocal skill_create_requested, agent_status
         from cptr.utils.agents.claude_code import run_claude_code_agent
         from cptr.utils.agents.cline import run_cline_agent
         from cptr.utils.agents.codex import run_codex_agent
@@ -1745,6 +1753,15 @@ async def run_chat_task(
 
             task_cwd = await resolve_chat_cwd(chat_id, chat_obj.meta, identity)
         agent_workspace = task_cwd or workspace or str(Path.home())
+        if not os.path.isdir(agent_workspace):
+            # Typically a path stored on another machine (before a migration):
+            # say so, instead of letting the agent fail obscurely or start
+            # somewhere else.
+            raise RuntimeError(
+                f"The workspace folder {agent_workspace} doesn't exist on this machine. "
+                "If it moved, run `cptr migrate-paths --map OLD=NEW` (a dry run first) "
+                "to update the stored paths."
+            )
         messages, loaded_summary = await _load_message_history(chat_id, message_id)
         skill_settings = await get_skill_settings()
         skill_authoring_allowed = _has_prior_real_chat_content(messages, loaded_summary)
@@ -1998,7 +2015,24 @@ async def run_chat_task(
                 _upsert_output_item(output_items, output_item)
                 await emit(output=output_item)
                 _sync_state()
+            elif isinstance(event, AgentSessionStarted):
+                await save_session(agent_target, event.resume_state, agent_workspace)
+            elif isinstance(event, AgentStatus):
+                # Liveness only (connection state, last activity time): kept
+                # with the live state for reloads, never saved as content.
+                agent_status = {
+                    "state": event.state,
+                    "last_activity": event.last_activity,
+                    "detail": event.detail,
+                    "attempt": event.attempt,
+                }
+                _sync_state()
+                await emit(agent_status=agent_status)
             elif isinstance(event, AgentError):
+                if event.resume_state:
+                    # The agent's session outlived this failure; keep it so
+                    # the next message continues it instead of starting over.
+                    await save_session(agent_target, event.resume_state, agent_workspace)
                 raise RuntimeError(event.message)
             elif isinstance(event, AgentDone):
                 await _finish_reasoning_item()

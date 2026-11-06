@@ -14,6 +14,16 @@ export interface ChatMessageRow {
 	usage: Record<string, number> | null;
 	meta: Record<string, any> | null;
 	created_at: number;
+	/** Live only: connection/liveness of the agent run still generating this reply. */
+	agent_status?: AgentRunStatus | null;
+}
+
+export interface AgentRunStatus {
+	state: 'connected' | 'waiting' | 'retrying' | 'reconnecting' | 'unreachable';
+	/** Epoch seconds of the agent's last real event. */
+	last_activity?: number | null;
+	detail?: string | null;
+	attempt?: number | null;
 }
 
 export interface ChatInfo {

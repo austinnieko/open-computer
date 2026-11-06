@@ -11,6 +11,7 @@
 	import { onDestroy } from 'svelte';
 	import { slide } from 'svelte/transition';
 	import { t } from '$lib/i18n';
+	import type { AgentRunStatus } from '$lib/apis/chat';
 	import {
 		buildRuns,
 		currentRun,
@@ -21,7 +22,12 @@
 
 	interface Props {
 		/** The assistant message being generated (null when nothing is running). */
-		message: { output: any[] | null; done: boolean; created_at: number } | null;
+		message: {
+			output: any[] | null;
+			done: boolean;
+			created_at: number;
+			agent_status?: AgentRunStatus | null;
+		} | null;
 		title: string;
 	}
 	let { message, title }: Props = $props();
@@ -55,20 +61,48 @@
 	// The latest few steps of real work (plan updates and lone thinking aside).
 	const recent = $derived(runs.filter((r) => r.kind !== 'plan').slice(-5));
 
+	// Connection state reported by the adapter (OpenCode 1.x): it outranks
+	// "working" because it explains why nothing new is arriving.
+	const agentStatus = $derived(message?.agent_status ?? null);
+	const connection = $derived(
+		agentStatus && ['reconnecting', 'unreachable', 'retrying'].includes(agentStatus.state)
+			? agentStatus.state
+			: null
+	);
 	const status = $derived(
-		waiting ? 'approval' : current?.kind === 'thinking' ? 'thinking' : 'working'
+		connection ?? (waiting ? 'approval' : current?.kind === 'thinking' ? 'thinking' : 'working')
 	);
 
 	// Elapsed time, ticking while the reply runs.
 	let now = $state(Date.now());
 	const timer = setInterval(() => (now = Date.now()), 1000);
 	onDestroy(() => clearInterval(timer));
-	const elapsed = $derived.by(() => {
-		if (!message?.created_at) return '';
-		const start = message.created_at > 1e12 ? message.created_at : message.created_at * 1000;
-		const s = Math.max(0, Math.round((now - start) / 1000));
-		return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
-	});
+	function duration(fromMs: number): string {
+		const s = Math.max(0, Math.round((now - fromMs) / 1000));
+		if (s < 60) return `${s}s`;
+		if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+		return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
+	}
+	const toMs = (t: number) => (t > 1e12 ? t : t * 1000);
+	const elapsed = $derived(message?.created_at ? duration(toMs(message.created_at)) : '');
+	// How long the current step has been running (OpenCode reports its start).
+	const stepElapsed = $derived(
+		current && current.status === 'active' && current.startedAt
+			? duration(toMs(current.startedAt))
+			: ''
+	);
+	const lastActivityMs = $derived(
+		agentStatus?.last_activity ? toMs(agentStatus.last_activity) : null
+	);
+	const lastActivityText = $derived(
+		lastActivityMs
+			? new Date(lastActivityMs).toLocaleTimeString([], {
+					hour: '2-digit',
+					minute: '2-digit',
+					second: '2-digit'
+				})
+			: ''
+	);
 
 	// Collapsed or not, remembered per browser.
 	const KEY = 'cptr:liveProgress:collapsed';
@@ -93,7 +127,10 @@
 	const STATUS_CLASS: Record<string, string> = {
 		working: 'text-blue-600 dark:text-blue-400',
 		thinking: 'text-gray-500 dark:text-gray-400',
-		approval: 'text-amber-600 dark:text-amber-400'
+		approval: 'text-amber-600 dark:text-amber-400',
+		retrying: 'text-amber-600 dark:text-amber-400',
+		reconnecting: 'text-amber-600 dark:text-amber-400',
+		unreachable: 'text-red-600 dark:text-red-400'
 	};
 	function mark(run: ActivityRun): string {
 		if (run.status === 'active') return 'live';
@@ -142,7 +179,9 @@
 		{#if collapsed}
 			{#if current}
 				<p class="truncate px-3 pb-2 -mt-1 text-gray-500 dark:text-gray-400">
-					{current.label}{current.latest ? ` · ${current.latest}` : ''}
+					{current.label}{current.latest ? ` · ${current.latest}` : ''}{stepElapsed
+						? ` · ${stepElapsed}`
+						: ''}
 				</p>
 			{/if}
 		{:else}
@@ -202,6 +241,26 @@
 								>{current.latest}</code
 							>
 						{/if}
+						{#if stepElapsed}
+							<span class="shrink-0 tabular-nums text-gray-400">{stepElapsed}</span>
+						{/if}
+					</p>
+				{/if}
+				{#if agentStatus?.state === 'reconnecting'}
+					<p class="text-amber-700 dark:text-amber-300">
+						{$t('chat.progress.reconnecting', { attempt: agentStatus.attempt ?? 1 })}
+					</p>
+				{:else if agentStatus?.state === 'unreachable'}
+					<p class="text-red-700 dark:text-red-300">{$t('chat.progress.unreachable')}</p>
+				{:else if agentStatus?.state === 'retrying'}
+					<p class="text-amber-700 dark:text-amber-300">
+						{$t('chat.progress.retrying', {
+							detail: agentStatus.detail ? `: ${agentStatus.detail}` : ''
+						})}
+					</p>
+				{:else if agentStatus?.state === 'waiting' && lastActivityMs && !waiting}
+					<p class="text-gray-500 dark:text-gray-400">
+						{$t('chat.progress.quiet', { duration: duration(lastActivityMs) })}
 					</p>
 				{/if}
 				{#if waiting}
@@ -216,6 +275,8 @@
 				<p class="text-[0.6875rem] text-gray-400">
 					{$t('chat.activity.operations', { count: operations })}{failedSteps
 						? ` · ${$t('chat.progress.failedSteps', { count: failedSteps })}`
+						: ''}{lastActivityText
+						? ` · ${$t('chat.progress.lastActivity', { time: lastActivityText })}`
 						: ''}
 				</p>
 			</div>
@@ -242,8 +303,24 @@
 		background: rgb(156 163 175);
 		animation: pulse-gray 1.6s ease-out infinite;
 	}
-	.dot.approval {
+	.dot.approval,
+	.dot.retrying {
 		background: rgb(245 158 11);
+	}
+	.dot.reconnecting {
+		background: rgb(245 158 11);
+		animation: pulse-amber 1.2s ease-out infinite;
+	}
+	.dot.unreachable {
+		background: rgb(239 68 68);
+	}
+	@keyframes pulse-amber {
+		0% {
+			box-shadow: 0 0 0 0 rgb(245 158 11 / 0.5);
+		}
+		100% {
+			box-shadow: 0 0 0 6px rgb(245 158 11 / 0);
+		}
 	}
 	@keyframes pulse {
 		0% {
@@ -315,7 +392,8 @@
 	}
 	@media (prefers-reduced-motion: reduce) {
 		.dot.working,
-		.dot.thinking {
+		.dot.thinking,
+		.dot.reconnecting {
 			animation: none;
 		}
 	}

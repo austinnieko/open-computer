@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from alembic import command
@@ -135,6 +137,74 @@ class WorktreeTests(CoordinationTestCase):
             await wt.ensure_worktree(repo, branch="task/occupied", path=str(target))
         self.assertEqual((target / "keep.txt").read_text(), "precious")
 
+    async def test_missing_github_cli_warns_without_blocking(self):
+        with mock.patch.object(registry, "_gh_installed", mock.AsyncMock(return_value=False)):
+            result = await self.register("Needs a PR")
+        self.assertIn("gh", result["warnings"][0])
+        self.assertTrue(Path(result["task"]["worktree_path"]).is_dir())
+
+    async def test_worktree_moved_out_of_band_is_explained_not_pruned(self):
+        # As after a migration: the folder moved, git still points at the old path.
+        first = (await self.register("Moved"))["task"]
+        old = first["worktree_path"]
+        moved = str(self.tmp / "elsewhere")
+        os.rename(old, moved)
+        os.rename(moved, old + "-new")
+        repo = wt.RepoIdentity(*(await self._ident()))
+        with self.assertRaises(wt.WorktreeError) as ctx:
+            await wt.ensure_worktree(repo, branch=first["branch"], path=old)
+        self.assertIn("git worktree repair", str(ctx.exception))
+        self.assertIn("Nothing was changed", str(ctx.exception))
+        listed = git(self.repo, "worktree", "list", "--porcelain")
+        self.assertIn(old, listed)  # the stale entry was not pruned
+
+    async def test_unregistered_checkout_at_target_suggests_repair(self):
+        repo = wt.RepoIdentity(*(await self._ident()))
+        target = Path(wt.default_worktree_path(str(self.repo), "copied"))
+        target.mkdir(parents=True)
+        (target / ".git").write_text("gitdir: /old/machine/.git/worktrees/copied\n")
+        (target / "work.py").write_text("keep")
+        with self.assertRaises(wt.WorktreeError) as ctx:
+            await wt.ensure_worktree(repo, branch="task/copied", path=str(target))
+        self.assertIn("git worktree repair", str(ctx.exception))
+        self.assertEqual((target / "work.py").read_text(), "keep")
+
+    async def test_lfs_repo_without_git_lfs_fails_before_creating_anything(self):
+        (self.repo / ".gitattributes").write_text("*.bin filter=lfs diff=lfs merge=lfs -text\n")
+        repo = wt.RepoIdentity(*(await self._ident()))
+        target = wt.default_worktree_path(str(self.repo), "lfs")
+        with mock.patch.object(wt, "lfs_available", mock.AsyncMock(return_value=False)):
+            with self.assertRaises(wt.WorktreeError) as ctx:
+                await wt.ensure_worktree(repo, branch="task/lfs", path=target)
+        self.assertIn("git-lfs", str(ctx.exception))
+        self.assertFalse(os.path.exists(target))
+        self.assertFalse(await wt.branch_exists(str(self.repo), "task/lfs"))
+
+    async def test_removing_a_missing_worktree_forgets_only_that_one(self):
+        a = (await self.register("Gone"))["task"]
+        b = (await self.register("Moved away"))["task"]
+        shutil.rmtree(a["worktree_path"])
+        os.rename(b["worktree_path"], b["worktree_path"] + "-moved")
+        repo = wt.RepoIdentity(*(await self._ident()))
+        await wt.remove_worktree(repo, a["worktree_path"], user_confirmed=True)
+        listed = git(self.repo, "worktree", "list", "--porcelain")
+        self.assertNotIn(a["worktree_path"] + "\n", listed + "\n")
+        self.assertIn(b["worktree_path"], listed)  # still repairable
+
+    async def test_agent_state_is_never_removed_with_the_worktree(self):
+        task = (await self.register("Agent state"))["task"]
+        path = task["worktree_path"]
+        Path(path, ".gitignore").write_text(".omo/\n")
+        git(path, "add", ".gitignore")
+        git(path, "commit", "-qm", "ignore agent state")
+        Path(path, ".omo").mkdir()
+        Path(path, ".omo", "plan.md").write_text("the plan")
+        repo = wt.RepoIdentity(*(await self._ident()))
+        with self.assertRaises(wt.WorktreeError) as ctx:
+            await wt.remove_worktree(repo, path, user_confirmed=True)
+        self.assertIn(".omo", str(ctx.exception))
+        self.assertEqual(Path(path, ".omo", "plan.md").read_text(), "the plan")
+
     async def _ident(self):
         r = await wt.repo_identity(str(self.repo))
         return r.key, r.main_root
@@ -252,6 +322,17 @@ class SessionBindingTests(CoordinationTestCase):
         other = await Chat.create(USER, "other", meta={})
         stolen = {"cwd": task["worktree_path"], "coord_task_id": task["id"]}
         self.assertIsNone(await registry.resolve_chat_cwd(other.id, stolen))
+
+    async def test_missing_worktree_stops_the_task_instead_of_using_the_main_checkout(self):
+        chat = await Chat.create(USER, "agent", meta={"workspace": str(self.repo)})
+        task = (await self.register("Moved task"))["task"]
+        await registry.bind_chat(task["id"], chat.id)
+        chat = await Chat.get_by_id(chat.id)
+        shutil.rmtree(task["worktree_path"])  # e.g. a path from before a migration
+        with self.assertRaises(registry.TaskWorktreeMissing) as ctx:
+            await registry.resolve_chat_cwd(chat.id, chat.meta)
+        self.assertIn("migrate-paths", str(ctx.exception))
+        self.assertIn("nothing was deleted", str(ctx.exception))
 
     async def test_one_chat_per_task(self):
         c1 = await Chat.create(USER, "a", meta={})

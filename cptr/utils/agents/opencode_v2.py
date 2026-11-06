@@ -82,12 +82,61 @@ def check_response(response: httpx.Response, *, has_password: bool) -> None:
         )
 
 
-async def detect_api_version(client: httpx.AsyncClient, headers: dict[str, str]) -> str:
-    """Return ``"v2"`` when the server speaks the 2.x ``/api`` protocol, else ``"v1"``.
+async def _advertised_paths(client: httpx.AsyncClient, headers: dict[str, str]) -> set[str] | None:
+    """Route paths from the server's OpenAPI document (``/doc``), if it has one."""
+    try:
+        response = await client.get("/doc", headers=headers)
+    except httpx.HTTPError:
+        return None
+    if response.status_code == 401:
+        raise auth_error(bool(headers.get("Authorization")))
+    if response.status_code != 200 or not _is_json(response):
+        return None
+    try:
+        spec = response.json()
+    except ValueError:
+        return None
+    paths = spec.get("paths") if isinstance(spec, dict) else None
+    return set(paths) if isinstance(paths, dict) else None
 
-    2.x answers ``/api/session/active`` with JSON (200, or 401 without valid
-    credentials). 1.x has no such route and serves its web UI or a 404.
+
+def _is_native_prompt_path(path: str) -> bool:
+    return path.startswith("/session/") and path.endswith("/prompt_async")
+
+
+async def detect_api_version(client: httpx.AsyncClient, headers: dict[str, str]) -> str:
+    """Which protocol to speak: ``"v1"`` (native ``/session``) or ``"v2"`` (``/api``).
+
+    Decided by what the server offers, not by version guesses. OpenCode 1.x
+    releases since ~1.19 serve *both* families (the native routes plus the
+    new ``/api/...``), with different request contracts; answering
+    ``/api/session/active`` therefore does not make a server 2.x-only. When
+    the native protocol is there, use it: it is the one these releases are
+    built around and the adapter's 1.x path handles.
+
+    1. ``/doc`` (OpenAPI) advertises ``/session/{id}/prompt_async`` → v1;
+       advertises only ``/api/...`` → v2.
+    2. No usable ``/doc``: ``GET /session/status`` answering JSON → v1.
+    3. ``GET /api/session/active`` answering JSON → v2.
+    4. Otherwise v1 (older 1.x without either route serves its web UI).
     """
+    paths = await _advertised_paths(client, headers)
+    if paths is not None:
+        if any(_is_native_prompt_path(p) for p in paths):
+            return API_V1
+        if any(p == "/api" or p.startswith("/api/") for p in paths):
+            return API_V2
+
+    native = await client.get("/session/status", headers=headers)
+    if native.status_code == 401 and _is_json(native):
+        raise auth_error(bool(headers.get("Authorization")))
+    if native.status_code == 200 and _is_json(native):
+        try:
+            if isinstance(native.json(), dict):
+                return API_V1
+        except ValueError:
+            pass
+
     response = await client.get("/api/session/active", headers=headers)
     if _is_json(response) and response.status_code in (200, 401):
         if response.status_code == 401:

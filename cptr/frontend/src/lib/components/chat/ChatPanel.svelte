@@ -16,6 +16,7 @@
 		queueSendNow as apiQueueSendNow,
 		queueDelete as apiQueueDelete,
 		updateChatSettings,
+		type AgentRunStatus,
 		type ChatMessageRow,
 		type ChatSendParams,
 		type ChatInfo,
@@ -641,6 +642,7 @@
 		message_id?: string;
 		delta?: string;
 		output?: any;
+		agent_status?: AgentRunStatus;
 		tasks?: ChatTask[];
 		context_usage?: ContextUsage | null;
 		done?: boolean;
@@ -728,6 +730,12 @@
 		if (!data.message_id) return;
 		const msg = allMessages.find((m) => m.id === data.message_id);
 		if (!msg) return;
+
+		if (data.agent_status) {
+			// Connection/liveness of the agent run (no content), for LiveProgress.
+			msg.agent_status = data.agent_status;
+			allMessages = [...allMessages];
+		}
 
 		if (data.delta) {
 			queueDelta(data.message_id, data.delta);
