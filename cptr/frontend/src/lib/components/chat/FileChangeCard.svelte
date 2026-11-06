@@ -125,11 +125,11 @@
 			<div class="overflow-x-auto border-t font-mono text-[0.6875rem] leading-relaxed">
 				{#each shown as lines, h (h)}
 					{#if h > 0 && lines.length}
-						<div class="app-muted border-t border-dashed px-3 py-0.5 text-[10px]">Edit {h + 1}</div>
+						<div class="app-muted border-t border-dashed px-3 py-0.5 text-[0.625rem]">Edit {h + 1}</div>
 					{/if}
 					{#each lines as line, i (i)}
 						{#if line.kind === 'skip'}
-							<div class="app-muted bg-gray-500/5 px-3 py-0.5 text-[10px] select-none">
+							<div class="app-muted bg-gray-500/5 px-3 py-0.5 text-[0.625rem] select-none">
 								{line.count
 									? `⋯ ${line.count} unchanged ${line.count === 1 ? 'line' : 'lines'}`
 									: '⋯'}
