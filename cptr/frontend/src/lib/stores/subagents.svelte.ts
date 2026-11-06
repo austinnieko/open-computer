@@ -70,7 +70,7 @@ function applyLive(parent: string, childId: string, data: any) {
 			}
 		}
 		row.activity = { kind: 'tool', name: out.name, status: out.status, arguments: args || {} };
-	} else if (out?.type === 'reasoning') {
+	} else if (out?.type === 'reasoning' || data.reasoning_delta) {
 		row.activity = { kind: 'thinking' };
 	} else if (typeof data.delta === 'string' && data.delta.trim()) {
 		row.activity = { kind: 'writing' };

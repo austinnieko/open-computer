@@ -1349,6 +1349,60 @@ def _reasoning_text_len(item: dict) -> int:
     return total
 
 
+def _plain_reasoning_text(item: dict) -> str | None:
+    """The text of a reasoning item with a single text block, else None."""
+    if item.get("summary"):
+        return None
+    blocks = item.get("content")
+    if blocks in (None, []):
+        return ""
+    if not isinstance(blocks, list) or len(blocks) != 1:
+        return None
+    block = blocks[0]
+    if not isinstance(block, dict) or not isinstance(block.get("text"), str):
+        return None
+    return block["text"]
+
+
+class ReasoningStream:
+    """Sends a reasoning item's growing text to the browser as appended pieces.
+
+    Providers and agents report reasoning as the whole item so far, once per
+    token. Sent as is, a long think resends its text thousands of times, so
+    traffic grows with the square of its length: one 15k-character think was
+    about 29 MB on the socket, to every open tab. The first and the final
+    update still carry the full item; in between only the new text goes out,
+    with the offset it starts at, so the browser can drop repeats and gaps.
+    """
+
+    def __init__(self) -> None:
+        self._sent: dict[str, str] = {}
+
+    def payload(self, data: dict) -> dict | None:
+        """The socket payload for `data`, or None when there is nothing new."""
+        item = data.get("output")
+        if not isinstance(item, dict) or item.get("type") != "reasoning":
+            return data
+        item_id = item.get("id")
+        text = _plain_reasoning_text(item)
+        if not isinstance(item_id, str) or not item_id:
+            return data
+        if item.get("status") != "in_progress" or text is None:
+            self._sent.pop(item_id, None)
+            return data
+        prev = self._sent.get(item_id)
+        self._sent[item_id] = text
+        if prev is None or not text.startswith(prev):
+            return data
+        if len(text) == len(prev):
+            return None
+        rest = {k: v for k, v in data.items() if k != "output"}
+        return {
+            **rest,
+            "reasoning_delta": {"id": item_id, "offset": len(prev), "text": text[len(prev) :]},
+        }
+
+
 def _output_debug_stats(output_items: list[dict] | None) -> tuple[dict[str, int], int, int]:
     """Return output type counts plus reasoning count/text length."""
     counts: dict[str, int] = {}
@@ -1564,10 +1618,16 @@ async def run_chat_task(
                 "[task %s] internal request creation failed", message_id[:8], exc_info=True
             )
 
+    reasoning_stream = ReasoningStream()
+
     async def emit(**data):
         """Stream an output delta to the user."""
         try:
-            await emit_to_user(user_id, {"chat_id": chat_id, "message_id": message_id, **data})
+            socket_data = reasoning_stream.payload(data)
+            if socket_data is not None:
+                await emit_to_user(
+                    user_id, {"chat_id": chat_id, "message_id": message_id, **socket_data}
+                )
         except Exception:
             # Socket failure must not prevent the queue push below,
             # otherwise the gateway SSE stream hangs forever.
@@ -1805,7 +1865,9 @@ async def run_chat_task(
             try:
                 _append_prompt_suffix(messages, await on_turn_start(chat_id, chat_obj.meta))
             except Exception:
-                logger.warning("[task %s] coordinator turn hook failed", message_id[:8], exc_info=True)
+                logger.warning(
+                    "[task %s] coordinator turn hook failed", message_id[:8], exc_info=True
+                )
         if regeneration_prompt:
             messages.append({"role": "user", "content": regeneration_prompt})
         if chat_params.get("plan_mode", False):
@@ -1817,9 +1879,7 @@ async def run_chat_task(
             sessions = (chat_obj.meta or {}).get("agent_sessions") or {}
             if isinstance(sessions, dict):
                 candidate = sessions.get(agent_target.profile_id)
-                if isinstance(candidate, dict) and _session_matches_cwd(
-                    candidate, agent_workspace
-                ):
+                if isinstance(candidate, dict) and _session_matches_cwd(candidate, agent_workspace):
                     resume_state = candidate
 
         runners = {
@@ -2600,7 +2660,11 @@ async def run_chat_task(
                         )
                         if item.get("status") in (None, "completed"):
                             _upsert_output_item(response_reasoning_items, item)
-                    logger.info(
+                    # Reasoning in progress arrives once per token; log it at debug.
+                    streaming_reasoning = (
+                        item.get("type") == "reasoning" and item.get("status") == "in_progress"
+                    )
+                    (logger.debug if streaming_reasoning else logger.info)(
                         "[task %s] output item: type=%s status=%s output=%d items reasoning_chars=%d response_reasoning_items=%d",
                         message_id[:8],
                         item.get("type"),

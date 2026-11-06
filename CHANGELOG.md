@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 🧠 **Smooth streaming while the model thinks.** Each reasoning token used to re-send the whole reasoning so far to every open tab, so traffic grew with the square of its length. One 15,000-character think was 28.8 MB on the socket, and replies lagged and arrived in bursts, especially over a remote connection. Now only the new text is sent (0.89 MB for the same think) and applied once per frame. The first and final updates still carry the full reasoning.
 - 🛟 **Agents that keep going when the connection doesn't.**
   - **No more "OpenCode stopped sending events for 10 minutes."** A long build, test run or slow model call is waiting, not failure: while OpenCode's heartbeats arrive and it reports the session busy, the reply keeps going. The live panel says *No new output for 4m 12s. OpenCode reports it is still working.*, with the last-activity time and how long the current step has run.
   - **Dropped event streams reconnect** (with backoff), including half-open ones that go silent without closing. Output produced while disconnected is read back from the session and shown once; the prompt is never re-sent, so no tool runs twice. The panel shows *Reconnecting*, *Retrying model* or *Not responding*. If OpenCode can't be reached for two minutes the reply fails with a clear message, and the next message continues the same session.
