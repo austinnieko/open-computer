@@ -972,6 +972,7 @@
 	"chat.activity.approval": "Approval required",
 	"chat.progress.aria": "Progress of {{title}}",
 	"chat.progress.untitled": "Agent at work",
+	"chat.loadFailed": "Couldn’t load this chat. Check your connection and try again.",
 	"chat.progress.status.working": "Working",
 	"chat.progress.status.thinking": "Thinking",
 	"chat.progress.status.approval": "Approval required",

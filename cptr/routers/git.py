@@ -150,6 +150,18 @@ async def git_status(request: Request, root: str):
         _handle_git_error(e)
 
 
+@router.get("/available")
+async def git_available(request: Request):
+    """Whether Git is installed, for showing Git settings.
+
+    The app asks this on every load, so it must stay cheap: just `git
+    --version`. `/config` also asks gh for its login, which goes over the
+    network and can take seconds.
+    """
+    identity = await _identity(request)
+    return {"installed": bool(await version(identity.home, identity))}
+
+
 @router.get("/config")
 async def git_config(request: Request, root: str | None = None):
     """Get Git and gh settings data for the Settings UI."""

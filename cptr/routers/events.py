@@ -12,6 +12,7 @@ import os
 import platform
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Optional, NamedTuple
 
@@ -495,6 +496,31 @@ async def _scan_ports() -> list[dict]:
     return filtered
 
 
+_shared_scan: tuple[float, list[dict]] | None = None
+_shared_scan_lock = asyncio.Lock()
+_SHARED_SCAN_TTL = 2.5
+
+
+async def _scan_ports_shared() -> list[dict]:
+    """One port scan shared by every connected tab.
+
+    A scan starts lsof plus a ps per process ancestor, and each websocket runs
+    its own loop, so with several tabs open the server was spawning bursts of
+    processes every few seconds. Only ports opened from our terminals are
+    reported, so with no terminal open there is nothing to find.
+    """
+    global _shared_scan
+    if not manager._sessions:
+        return []
+    async with _shared_scan_lock:
+        now = time.monotonic()
+        if _shared_scan and now - _shared_scan[0] < _SHARED_SCAN_TTL:
+            return _shared_scan[1]
+        result = await _scan_ports()
+        _shared_scan = (time.monotonic(), result)
+        return result
+
+
 async def _port_scanner_loop(ws: WebSocket) -> None:
     """Periodically scan ports and push add/remove events."""
     known: dict[int, dict] = {}  # port -> info
@@ -503,7 +529,7 @@ async def _port_scanner_loop(ws: WebSocket) -> None:
         await asyncio.sleep(3)
 
         try:
-            current_ports = {p["port"]: p for p in await _scan_ports()}
+            current_ports = {p["port"]: p for p in await _scan_ports_shared()}
         except Exception as e:
             logger.warning(f"Port scan error: {e}")
             continue

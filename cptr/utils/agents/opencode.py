@@ -404,7 +404,12 @@ async def run_opencode_agent(
                         base_url=candidate_url,
                         timeout=httpx.Timeout(None, connect=5),
                     ) as client:
-                        api = await opencode_v2.detect_api_version(client, headers)
+                        # The client has no read timeout (replies stream for as
+                        # long as they take), so a hung server must not hang this
+                        # quick probe and leave the chat "working" forever.
+                        api = await asyncio.wait_for(
+                            opencode_v2.detect_api_version(client, headers), timeout=30
+                        )
                         if api == opencode_v2.API_V2:
                             async for event in _run_v2(
                                 client,
@@ -489,17 +494,21 @@ async def run_opencode_agent(
                                     last_activity = asyncio.get_running_loop().time()
                                     yield item
                             except asyncio.CancelledError:
+                                # Bounded, so Stop can't hang on an unresponsive server.
                                 with suppress(Exception):
-                                    await _request(
-                                        client,
-                                        "POST",
-                                        [
-                                            f"session/{session_id}/abort",
-                                            "session.abort",
-                                            "session/abort",
-                                        ],
-                                        headers=headers,
-                                        json_body={"sessionID": session_id},
+                                    await asyncio.wait_for(
+                                        _request(
+                                            client,
+                                            "POST",
+                                            [
+                                                f"session/{session_id}/abort",
+                                                "session.abort",
+                                                "session/abort",
+                                            ],
+                                            headers=headers,
+                                            json_body={"sessionID": session_id},
+                                        ),
+                                        timeout=5,
                                     )
                                 raise
                             finally:
