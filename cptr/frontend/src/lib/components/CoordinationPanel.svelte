@@ -622,7 +622,9 @@
 		dependsOn: [] as string[],
 		model: initialModel(),
 		base: '',
-		startNow: true
+		startNow: true,
+		planMode: false,
+		followEdits: false
 	});
 
 	// The model list can load after this panel mounts; fill the picker once it
@@ -640,7 +642,9 @@
 			dependsOn: [],
 			model: initialModel(),
 			base: '',
-			startNow: true
+			startNow: true,
+			planMode: false,
+			followEdits: false
 		};
 	}
 
@@ -661,7 +665,9 @@
 				model_id: form.model ?? undefined,
 				test_command: form.testCommand.trim() || undefined,
 				base_ref: form.base || undefined,
-				start_now: form.startNow
+				start_now: form.startNow,
+				plan_mode: form.planMode,
+				follow_edits: form.followEdits
 			});
 			if (result.worktree?.error) toast.error(result.worktree.error);
 			selectedId = result.task.id;
@@ -1670,6 +1676,27 @@
 			<div class="flex items-center gap-2">
 				<span class="label mb-0">{$t('coordination.model')}</span>
 				<ModelSelector bind:selectedModel={form.model} preferAbove={false} align="start" />
+			</div>
+			<!-- The same per-chat options as the message box's + menu. -->
+			<div class="flex flex-col gap-1.5">
+				<label class="flex items-start gap-2 text-xs text-gray-600 dark:text-gray-300">
+					<input type="checkbox" class="mt-0.5" bind:checked={form.planMode} />
+					<span>
+						{$t('coordination.planMode')}
+						<span class="block text-[0.6875rem] text-gray-400"
+							>{$t('coordination.planModeHint')}</span
+						>
+					</span>
+				</label>
+				<label class="flex items-start gap-2 text-xs text-gray-600 dark:text-gray-300">
+					<input type="checkbox" class="mt-0.5" bind:checked={form.followEdits} />
+					<span>
+						{$t('coordination.followEdits')}
+						<span class="block text-[0.6875rem] text-gray-400"
+							>{$t('coordination.followEditsHint')}</span
+						>
+					</span>
+				</label>
 			</div>
 			{#if baseOptions.length}
 				<label class="block">
