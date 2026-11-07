@@ -404,6 +404,30 @@ class UsageCacheTests(ApiTestCase):
             self.assertEqual(tally.call_count, 2)  # the edited reply and the live one
 
 
+class ForkTests(ApiTestCase):
+    """A forked chat never shares the original's coding-agent session."""
+
+    async def test_fork_starts_its_own_agent_session(self):
+        from cptr.models.chats import Chat, ChatMessage
+        from tests.test_coordination import USER as U
+
+        session = {"session_id": "ses_original", "workspace": str(self.repo)}
+        chat = await Chat.create(
+            U, "Agent chat", meta={"workspace": str(self.repo), "agent_sessions": {"oc": session}}
+        )
+        q = await ChatMessage.create(chat.id, "user", "fix the bug")
+        await ChatMessage.create(chat.id, "assistant", "done", parent_id=q.id)
+
+        response = await self.client.post(f"/api/chats/{chat.id}/fork", json={})
+        self.assertEqual(response.status_code, 200, response.text)
+        fork = await Chat.get_by_id(response.json()["chat_id"])
+        self.assertNotIn("agent_sessions", fork.meta)
+        self.assertEqual(fork.meta["workspace"], str(self.repo))  # everything else is kept
+        self.assertEqual(fork.meta["forked_from"], chat.id)
+        original = await Chat.get_by_id(chat.id)
+        self.assertEqual(original.meta["agent_sessions"]["oc"]["session_id"], "ses_original")
+
+
 class OriginFolderTests(ApiTestCase):
     """A task belongs to the folder it was started from, even in a shared repo."""
 

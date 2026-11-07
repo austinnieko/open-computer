@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 🍴 **A forked chat gets its own agent session.** Forking used to copy the original chat's OpenCode (or other coding agent) session, so both chats sent their turns into one session, and the fork inherited all of its context, including work done after the fork point. Now the fork's first turn starts a new session, given the forked messages as context.
 - 🐢 **Faster Agents page.** The task list now shows straight away; tokens and time fill in after. Refreshes no longer pile up while agents are busy (one runs at a time). A running task's chat no longer has its whole history, with every tool output, re-read on each refresh: finished replies are counted once and remembered, so only new or changed replies are read. This also stops the dashboard from briefly stalling streaming in other tabs.
 - 🧠 **Smooth streaming while the model thinks.** Each reasoning token used to re-send the whole reasoning so far to every open tab, so traffic grew with the square of its length. One 15,000-character think was 28.8 MB on the socket, and replies lagged and arrived in bursts, especially over a remote connection. Now only the new text is sent (0.89 MB for the same think) and applied once per frame. The first and final updates still carry the full reasoning.
 - 🛟 **Agents that keep going when the connection doesn't.**
