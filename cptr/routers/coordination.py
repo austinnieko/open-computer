@@ -765,21 +765,88 @@ def _descendants(index: dict[str, list[Chat]], root: str) -> list[Chat]:
     return out
 
 
-async def _chat_usage(chat_id: str, updated_at: int | None, active: set[str]) -> dict:
-    from cptr.models.chats import ChatMessage
+# Usage of one finished reply, by (id, done, content/output/usage lengths). A
+# reply only changes while its turn runs, so a chat that is still working
+# re-reads just the replies that changed, not its whole history with every
+# tool output: that used to happen on each dashboard refresh while agents ran.
+_message_usage_cache: dict[tuple, dict] = {}
+_MESSAGE_USAGE_CACHE_MAX = 50_000
+_MESSAGE_FETCH_CHUNK = 200
+_size_fn = "octet_length"
+
+
+def _message_usage(message) -> dict:
     from cptr.routers.chat import _tally_messages
 
-    key = (chat_id, int(updated_at or 0))
-    if chat_id not in active and key in _chat_usage_cache:
-        return _chat_usage_cache[key]
-    stats = _tally_messages(await ChatMessage.get_all_by_chat(chat_id))
-    usage = {
+    stats = _tally_messages([message])
+    return {
         "tokens": stats["totals"]["total"],
         "cost_usd": stats["totals"]["cost_usd"],
         "duration_ms": stats["totals"]["duration_ms"],
         "tool_calls": sum(t["count"] for t in stats["tools"]),
         "turns": len(stats["turns"]),
     }
+
+
+async def _replies_usage(chat_id: str) -> dict:
+    """A chat's usage, summed per reply; full rows are loaded only for replies
+    not already cached."""
+    from cptr.models.chats import ChatMessage
+    from cptr.utils.db import get_db
+    from sqlalchemy import func, select
+    from sqlalchemy.exc import OperationalError
+
+    global _size_fn
+    # octet_length (SQLite 3.43+) reads the size from the row header; length()
+    # would read every tool output just to measure it.
+    size = getattr(func, _size_fn)
+    query = select(
+        ChatMessage.id,
+        ChatMessage.done,
+        size(ChatMessage.content),
+        size(ChatMessage.output),
+        size(ChatMessage.usage),
+    ).where(ChatMessage.chat_id == chat_id, ChatMessage.role == "assistant")
+    async with await get_db() as db:
+        try:
+            rows = (await db.execute(query)).all()
+        except OperationalError:
+            if _size_fn == "length":
+                raise
+            _size_fn = "length"
+            return await _replies_usage(chat_id)
+    keys = {row[0]: (row[0], bool(row[1]), row[2], row[3], row[4]) for row in rows}
+    per_reply = {mid: _message_usage_cache.get(key) for mid, key in keys.items()}
+    missing = [mid for mid, usage in per_reply.items() if usage is None]
+    for start in range(0, len(missing), _MESSAGE_FETCH_CHUNK):
+        chunk = missing[start : start + _MESSAGE_FETCH_CHUNK]
+        async with await get_db() as db:
+            messages = (
+                (await db.execute(select(ChatMessage).where(ChatMessage.id.in_(chunk))))
+                .scalars()
+                .all()
+            )
+        for message in messages:
+            usage = _message_usage(message)
+            per_reply[message.id] = usage
+            key = keys.get(message.id)
+            if key and key[1]:  # finished: it won't change until edited
+                if len(_message_usage_cache) >= _MESSAGE_USAGE_CACHE_MAX:
+                    _message_usage_cache.clear()
+                _message_usage_cache[key] = usage
+    total = {"tokens": 0, "cost_usd": 0.0, "duration_ms": 0, "tool_calls": 0, "turns": 0}
+    for usage in per_reply.values():
+        for k in total:
+            total[k] += (usage or {}).get(k, 0)
+    total["cost_usd"] = round(total["cost_usd"], 6)
+    return total
+
+
+async def _chat_usage(chat_id: str, updated_at: int | None, active: set[str]) -> dict:
+    key = (chat_id, int(updated_at or 0))
+    if chat_id not in active and key in _chat_usage_cache:
+        return _chat_usage_cache[key]
+    usage = await _replies_usage(chat_id)
     if chat_id not in active:  # a running turn's numbers are still changing
         if len(_chat_usage_cache) >= _CHAT_USAGE_CACHE_MAX:
             _chat_usage_cache.clear()

@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 🐢 **Faster Agents page.** The task list now shows straight away; tokens and time fill in after. Refreshes no longer pile up while agents are busy (one runs at a time). A running task's chat no longer has its whole history, with every tool output, re-read on each refresh: finished replies are counted once and remembered, so only new or changed replies are read. This also stops the dashboard from briefly stalling streaming in other tabs.
 - 🧠 **Smooth streaming while the model thinks.** Each reasoning token used to re-send the whole reasoning so far to every open tab, so traffic grew with the square of its length. One 15,000-character think was 28.8 MB on the socket, and replies lagged and arrived in bursts, especially over a remote connection. Now only the new text is sent (0.89 MB for the same think) and applied once per frame. The first and final updates still carry the full reasoning.
 - 🛟 **Agents that keep going when the connection doesn't.**
   - **No more "OpenCode stopped sending events for 10 minutes."** A long build, test run or slow model call is waiting, not failure: while OpenCode's heartbeats arrive and it reports the session busy, the reply keeps going. The live panel says *No new output for 4m 12s. OpenCode reports it is still working.*, with the last-activity time and how long the current step has run.

@@ -82,34 +82,66 @@ let usageRefs = 0;
 let listening = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let seq = 0;
+let inFlight: Promise<void> | null = null;
+let again = false;
 
-async function load() {
+function apply(data: Awaited<ReturnType<typeof getCoordSummary>>) {
+	state.tasks = data.tasks;
+	state.activeChats = new Set(data.active_chats);
+	state.maxWriters = data.limits?.max_writers ?? state.maxWriters;
+	if (data.usage) {
+		state.usage = data.usage.tasks;
+		state.usageTotals = data.usage.totals;
+	}
+	if (data.conflicts) state.conflicts = data.conflicts;
+	const deps: Record<string, string[]> = {};
+	for (const d of data.dependencies ?? []) (deps[d.task_id] ??= []).push(d.depends_on);
+	state.dependsOn = deps;
+	state.error = '';
+	state.loaded = true;
+}
+
+async function fetchOnce() {
 	const mine = ++seq;
 	const withUsage = usageRefs > 0;
 	state.loading = true;
 	try {
-		const data = await getCoordSummary(withUsage);
-		if (mine !== seq) return;
-		state.tasks = data.tasks;
-		state.activeChats = new Set(data.active_chats);
-		state.maxWriters = data.limits?.max_writers ?? state.maxWriters;
-		if (data.usage) {
-			state.usage = data.usage.tasks;
-			state.usageTotals = data.usage.totals;
+		// Usage (tokens, time) is the slow part: on a first load, show the
+		// task list as soon as it's ready and fill the usage in after.
+		if (withUsage && !state.loaded) {
+			const quick = await getCoordSummary(false);
+			if (mine === seq) apply(quick);
 		}
-		if (data.conflicts) state.conflicts = data.conflicts;
-		const deps: Record<string, string[]> = {};
-		for (const d of data.dependencies ?? []) (deps[d.task_id] ??= []).push(d.depends_on);
-		state.dependsOn = deps;
-		state.error = '';
+		const data = await getCoordSummary(withUsage);
+		if (mine === seq) apply(data);
 	} catch (error: any) {
-		if (mine === seq) state.error = error?.message ?? String(error);
-	} finally {
 		if (mine === seq) {
-			state.loading = false;
+			state.error = error?.message ?? String(error);
 			state.loaded = true;
 		}
+	} finally {
+		if (mine === seq) state.loading = false;
 	}
+}
+
+// One fetch at a time. Events arriving meanwhile ask for one more fetch when
+// it finishes, rather than piling slow usage tallies up on the server.
+function load(): Promise<void> {
+	if (inFlight) {
+		again = true;
+		return inFlight;
+	}
+	inFlight = (async () => {
+		try {
+			do {
+				again = false;
+				await fetchOnce();
+			} while (again);
+		} finally {
+			inFlight = null;
+		}
+	})();
+	return inFlight;
 }
 
 function schedule(delay: number) {
