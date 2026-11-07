@@ -60,6 +60,20 @@ function reconnect() {
 	socket.connect();
 }
 
+/**
+ * Whether the connection still works: the server answers a ping in time.
+ * A socket a phone suspended can look connected while it is dead.
+ */
+async function isAlive(timeoutMs = 2000): Promise<boolean> {
+	if (!socket?.connected) return false;
+	try {
+		await socket.timeout(timeoutMs).emitWithAck('cptr:ping');
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /** Get the raw socket instance for registering listeners. */
 function getSocket(): Socket | null {
 	return socket;
@@ -92,6 +106,7 @@ export const socketStore = {
 	connect,
 	disconnect,
 	reconnect,
+	isAlive,
 	getSocket,
 	on,
 	off,

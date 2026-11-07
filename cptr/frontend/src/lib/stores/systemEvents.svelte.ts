@@ -125,6 +125,13 @@ function reconnect() {
 	connect(path);
 }
 
+/** Reconnect only if the connection is closed or closing. */
+function ensureConnected() {
+	if (!currentWatchPath) return;
+	if (ws && ws.readyState <= WebSocket.OPEN) return;
+	reconnect();
+}
+
 function disconnect() {
 	if (reconnectTimer) {
 		clearTimeout(reconnectTimer);
@@ -157,6 +164,7 @@ function dismissPort(port: number) {
 export const systemEvents = {
 	connect,
 	reconnect,
+	ensureConnected,
 	disconnect,
 	watchPath,
 
