@@ -87,16 +87,41 @@ function schedule(chatId: string, delay: number) {
 	}, delay);
 }
 
-export async function refresh(chatId: string) {
-	const entry = entries[chatId];
-	if (!entry) return;
+// The sidebar tracks every chat it lists, so a reconnect or a page load asks
+// for dozens of lists at once: send a few at a time instead of all together.
+const MAX_IN_FLIGHT = 4;
+let inFlight = 0;
+const waiting: string[] = [];
+
+export function refresh(chatId: string): void {
+	if (!entries[chatId] || waiting.includes(chatId)) return;
+	waiting.push(chatId);
+	pump();
+}
+
+function pump() {
+	while (inFlight < MAX_IN_FLIGHT && waiting.length) {
+		const chatId = waiting.shift()!;
+		if (!entries[chatId]) continue;
+		inFlight += 1;
+		void fetchOne(chatId).finally(() => {
+			inFlight -= 1;
+			pump();
+		});
+	}
+}
+
+async function fetchOne(chatId: string) {
 	try {
 		const { subagents } = await getSubagents(chatId);
+		const entry = entries[chatId];
+		if (!entry) return;
 		entry.items = subagents;
 		entry.loaded = true;
 		for (const s of subagents) childToParent[s.chat_id] = chatId;
 	} catch {
-		entry.loaded = true;
+		const entry = entries[chatId];
+		if (entry) entry.loaded = true;
 	}
 }
 

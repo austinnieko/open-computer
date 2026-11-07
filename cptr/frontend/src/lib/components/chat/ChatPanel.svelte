@@ -41,6 +41,7 @@
 	} from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import { trackSubagents } from '$lib/stores/subagents.svelte';
+	import { draftTabs } from '$lib/stores/chatDrafts';
 	import { setFollowEdits, watchChatEdits } from '$lib/stores/followEdits.svelte';
 	import AgentsPanel from './AgentsPanel.svelte';
 	import LiveProgress from './LiveProgress.svelte';
@@ -141,9 +142,10 @@
 	let contextUsage = $state<ContextUsage | null>(null);
 	let chatTasks = $state<ChatTask[]>([]);
 
-	// Keep this chat's sub-agent list live for the cards and the Agents panel.
+	// Keep this chat's sub-agent list live for the cards and the Agents panel
+	// (only while the tab is on screen; the sidebar tracks the rest).
 	$effect(() => {
-		if (!chatId) return;
+		if (!chatId || !active) return;
 		return trackSubagents(chatId);
 	});
 
@@ -467,8 +469,8 @@
 	$effect(() => {
 		if (active && !wasActive) {
 			refreshCommandSessions();
-			if (staleSinceReconnect && chatId) {
-				staleSinceReconnect = false;
+			if (stale && chatId) {
+				stale = false;
 				loadChat(chatId);
 			}
 		}
@@ -479,7 +481,7 @@
 		if (chatId === commandSessionsChatId) return;
 		commandSessionsChatId = chatId;
 		commandSessions = [];
-		if (chatId) refreshCommandSessions();
+		if (chatId && untrack(() => active)) refreshCommandSessions();
 	});
 
 	// ── Load chat from DB ───────────────────────────────────────
@@ -713,6 +715,26 @@
 
 		if (data.chat_id !== chatId) return;
 
+		// A tab in the background stays idle: it notes that it is out of date and
+		// reloads when it is shown, instead of rendering every update off screen.
+		// (Voice mode keeps reading a reply aloud after you switch tabs.)
+		if (!active && !voiceModeEnabled) {
+			if (data.title && tabId) {
+				chatTitle = data.title;
+				updateTab(tabId, data.chat_id, data.title);
+			}
+			if (data.message_id || data.pending_inputs_processed || data.async_subagent_pending) {
+				stale = true;
+				dropPendingDeltas();
+			}
+			// Keep the tab's spinner while it works; the global listener clears it on done.
+			if (data.message_id && !data.done && tabId) {
+				const tid = tabId;
+				streamingChatTabs.update((tabs) => (tabs.has(tid) ? tabs : new Set(tabs).add(tid)));
+			}
+			return;
+		}
+
 		if (data.type === 'chat:tasks') {
 			setChatTasks(data.tasks ?? []);
 			return;
@@ -859,14 +881,15 @@
 		pendingReasoning.clear();
 	}
 
-	// After a reconnect (the app coming back from the background, say) only the
-	// tab on screen reloads now; the others reload when you switch to them, so
-	// resuming with many tabs open doesn't fetch every transcript at once.
-	let staleSinceReconnect = false;
+	// Only the tab on screen loads and follows its chat. A tab in the background
+	// (opened at startup, or after a reconnect, or one that got updates while
+	// hidden) loads when you switch to it, so many open tabs don't fetch and
+	// render every transcript at once.
+	let stale = false;
 	function handleReconnect() {
 		if (!chatId) return;
 		if (active) loadChat(chatId);
-		else staleSinceReconnect = true;
+		else stale = true;
 	}
 
 	// A new, empty chat follows the current default model, also when the model
@@ -928,11 +951,12 @@
 		resetChatSettings();
 
 		if (chatId) {
-			loadChat(chatId);
+			if (active) loadChat(chatId);
+			else stale = true;
 		} else {
 			loadPreviousChats();
 		}
-		refreshCommandSessions();
+		if (active) refreshCommandSessions();
 		// Every open tab keeps a ChatPanel mounted; only the one on screen polls,
 		// and not while the app is in the background.
 		commandSessionsTimer = setInterval(() => {
@@ -974,6 +998,15 @@
 		) {
 			stopTtsPlayback();
 		}
+	});
+
+	// A tab with an unsent message is never closed to make room for others.
+	$effect(() => {
+		if (!tabId) return;
+		const tid = tabId;
+		if (inputText.trim()) draftTabs.add(tid);
+		else draftTabs.delete(tid);
+		return () => draftTabs.delete(tid);
 	});
 
 	// ── Sync streaming state to shared store for tab icon ────
