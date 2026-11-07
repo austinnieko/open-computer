@@ -176,14 +176,29 @@
 				if (serverUp && !socketStore.connected) reloadApp('reconnect failed');
 			}, WATCHDOG_MS);
 		};
-		const resume = (away = 0) => {
-			if (authState !== 'authenticated') return;
+		let resuming = false;
+		const resume = async (away = 0) => {
+			if (authState !== 'authenticated' || resuming) return;
 			if (away >= RELOAD_AFTER_MS && reloadApp('long absence')) return;
-			socketStore.reconnect();
-			systemEvents.reconnect();
-			armWatchdog();
-			checkForAppUpdate();
-			void refreshChatState(); // models or the default may have changed elsewhere
+			resuming = true;
+			try {
+				checkForAppUpdate();
+				void refreshChatState(); // models or the default may have changed elsewhere
+				// A connection that still answers missed nothing: events kept
+				// arriving while the app was in the background. Replacing it
+				// anyway made every view refetch (the open chat included) each
+				// time you switched back to the tab or window, freezing it while
+				// a reply streamed. Only a dead one is replaced.
+				if (await socketStore.isAlive()) {
+					systemEvents.ensureConnected();
+					return;
+				}
+				socketStore.reconnect();
+				systemEvents.reconnect();
+				armWatchdog();
+			} finally {
+				resuming = false;
+			}
 		};
 		const onVisibility = () => {
 			if (document.visibilityState === 'hidden') {

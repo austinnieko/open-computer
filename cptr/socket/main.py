@@ -58,6 +58,12 @@ async def on_disconnect(sid):
             del _chat_view_sids[key]
 
 
+@sio.on("cptr:ping")
+async def on_ping(sid, data=None):
+    """Answer the app's liveness check when it comes back to the foreground."""
+    return True
+
+
 @sio.on("chat:view")
 async def on_chat_view(sid, data):
     """Track which chat panels are currently visible for timeout pausing."""
