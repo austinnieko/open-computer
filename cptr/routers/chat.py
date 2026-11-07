@@ -1254,6 +1254,11 @@ async def fork_chat(request: Request, chat_id: str, body: ForkChatRequest | None
     branch.reverse()
 
     meta = deepcopy(chat.meta or {})
+    # A fork gets its own coding-agent sessions. Sharing the original's would
+    # send both chats' turns into one OpenCode/Codex/... session, and carry
+    # that session's whole context (and anything after the fork point) along.
+    # The fork's first turn starts a session seeded with the forked messages.
+    meta.pop("agent_sessions", None)
     meta["forked_from"] = chat.id
     meta["forked_from_message_id"] = source_message.id
     now = now_ms()
