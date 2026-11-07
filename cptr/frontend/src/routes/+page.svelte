@@ -55,11 +55,13 @@
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { TAB_DRAG_MIME } from '$lib/constants';
 	import { isSupportedWorkspacePath } from '$lib/utils/paths';
-	import { coordinationOf, trackCoordination } from '$lib/stores/coordination.svelte';
+	import { getFinishedChats } from '$lib/apis/coordination';
+	import { deletedChats, markChatDeleted } from '$lib/stores/deletedChats';
+	import { socketStore } from '$lib/stores/socket.svelte';
 	import { doneTaskChats, MAX_CHAT_TABS, overflowChatTabs, tabsToClose } from '$lib/utils/doneTabs';
 	import { draftTabs } from '$lib/stores/chatDrafts';
 	import { chatStatuses } from '$lib/stores/chat';
-	import { untrack } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 
 	let showPicker = $state(false);
 
@@ -80,8 +82,25 @@
 		});
 	});
 
-	// Close the tabs of tasks marked done (or ended) once they're in the
-	// background. The chats are kept; one you open again stays open.
+	// A deleted chat's tabs close in every pane, the one on screen included.
+	$effect(() => {
+		const deleted = $deletedChats;
+		const groups = $currentWorkspace?.groups ?? [];
+		const homeGroups = $homeState.groups;
+		if (!deleted.size) return;
+		untrack(() => {
+			for (const g of groups)
+				for (const tab of g.tabs)
+					if (tab.type === 'chat' && tab.path && deleted.has(tab.path))
+						void closeTab(tab.id, g.id, { skipUnsavedPrompt: true });
+			for (const g of homeGroups)
+				for (const tab of g.tabs)
+					if (tab.type === 'chat' && tab.path && deleted.has(tab.path)) closeHomeTab(tab.id, g.id);
+		});
+	});
+
+	// Close the tabs of tasks marked done (or ended), in every pane, once they're
+	// in the background. The chats are kept; one you open again stays open.
 	const AUTO_CLOSED_KEY = 'computer.doneTaskTabsClosed';
 	function readAutoClosed(): Set<string> {
 		try {
@@ -91,21 +110,60 @@
 		}
 	}
 	const autoClosed = readAutoClosed();
-	const coordRoot = $derived($currentWorkspace?.path ?? '');
+	let finishedChats = $state(new Set<string>());
+	const openChatIds = $derived.by(() => {
+		const ids = new Set<string>();
+		for (const g of [...($currentWorkspace?.groups ?? []), ...$homeState.groups])
+			for (const tab of g.tabs)
+				// new-/pending- tabs are chats not created yet, not missing ones.
+				if (tab.type === 'chat' && tab.path && !/^(new|pending)-/.test(tab.path)) ids.add(tab.path);
+		return [...ids].filter((id) => !autoClosed.has(id)).sort();
+	});
+	const openChatKey = $derived(openChatIds.join(','));
+	let finishedTimer: ReturnType<typeof setTimeout> | null = null;
+	function checkFinished(delay = 300) {
+		if (finishedTimer) clearTimeout(finishedTimer);
+		finishedTimer = setTimeout(async () => {
+			finishedTimer = null;
+			const ids = untrack(() => openChatIds);
+			if (!ids.length) return;
+			const res = await getFinishedChats(ids).catch(() => null);
+			if (!res) return;
+			finishedChats = new Set(res.chat_ids);
+			for (const id of res.missing ?? []) markChatDeleted(id);
+		}, delay);
+	}
 	$effect(() => {
-		if (!coordRoot) return;
-		return trackCoordination(coordRoot);
+		void openChatKey;
+		checkFinished();
+	});
+	onMount(() => {
+		const offEvents = socketStore.on('events:chat', (data: any) => {
+			if (typeof data?.type === 'string' && data.type.startsWith('coord:')) checkFinished(1000);
+		});
+		const offConnect = socketStore.on('connect', () => checkFinished(1000));
+		return () => {
+			offEvents();
+			offConnect();
+			if (finishedTimer) clearTimeout(finishedTimer);
+		};
 	});
 	$effect(() => {
-		const coord = coordinationOf(coordRoot);
+		const done = finishedChats;
 		const groups = $currentWorkspace?.groups ?? [];
-		if (!coordRoot || !coord.loaded) return;
-		const close = tabsToClose(groups, doneTaskChats(coord.tasks), autoClosed);
-		if (!close.length) return;
+		const homeGroups = $homeState.groups;
+		if (!done.size) return;
 		untrack(() => {
-			for (const tab of close) {
+			const work = tabsToClose(groups, done, autoClosed);
+			const home = tabsToClose(homeGroups, done, autoClosed);
+			if (!work.length && !home.length) return;
+			for (const tab of work) {
 				autoClosed.add(tab.chatId);
 				void closeTab(tab.tabId, tab.groupId, { skipUnsavedPrompt: true });
+			}
+			for (const tab of home) {
+				autoClosed.add(tab.chatId);
+				closeHomeTab(tab.tabId, tab.groupId);
 			}
 			try {
 				localStorage.setItem(AUTO_CLOSED_KEY, JSON.stringify([...autoClosed].slice(-500)));
@@ -114,6 +172,7 @@
 			}
 		});
 	});
+
 	let pendingIntent = $state<LaunchIntent | null>(null);
 	let folderPickerIntent = $state<LaunchIntent | null>(null);
 	let folderPickerWorkspace = $state<string | null>(null);

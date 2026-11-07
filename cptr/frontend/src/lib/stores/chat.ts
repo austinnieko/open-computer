@@ -6,6 +6,7 @@ import { toast } from 'svelte-sonner';
 import { fetchJSON } from '$lib/apis';
 import { socketStore } from '$lib/stores/socket.svelte';
 import { activeHomeTab, activeTab, currentWorkspace } from '$lib/stores';
+import { markChatDeleted } from '$lib/stores/deletedChats';
 import { getPathDisplayName, isSupportedWorkspacePath } from '$lib/utils/paths';
 import { i18next } from '$lib/i18n';
 
@@ -171,7 +172,12 @@ export function bindGlobalChatListener() {
 			active?: boolean;
 			updated_at?: number;
 			last_read_at?: number;
+			deleted?: boolean;
 		}) => {
+			if (data.deleted) {
+				markChatDeleted(data.chat_id);
+				return;
+			}
 			if (data.type === 'chat:active' && typeof data.active === 'boolean') {
 				setChatActive(data.chat_id, data.active, data.workspace);
 			}

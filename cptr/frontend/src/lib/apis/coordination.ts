@@ -177,6 +177,12 @@ export interface CoordSummary {
 export const getCoordSummary = (usage = false) =>
 	fetchJSON<CoordSummary>(`/api/coordination/summary${usage ? '?usage=true' : ''}`);
 
+/** Which of these chats belong to a task that is done or ended, and which are gone. */
+export const getFinishedChats = (chatIds: string[]) =>
+	fetchJSON<{ chat_ids: string[]; missing: string[] }>(
+		`/api/coordination/finished-chats?chat_ids=${encodeURIComponent(chatIds.join(','))}`
+	);
+
 export const getCoordTasks = (root: string) =>
 	fetchJSON<TaskListResponse>(`/api/coordination/tasks?${q(root)}`);
 

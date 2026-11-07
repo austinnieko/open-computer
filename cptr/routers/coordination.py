@@ -288,6 +288,23 @@ async def list_tasks(request: Request, root: str):
 SUMMARY_RECENT_MS = 24 * 60 * 60 * 1000
 
 
+@router.get("/finished-chats")
+async def finished_chats(request: Request, chat_ids: str = ""):
+    """Which of these chats (comma-separated ids) belong to a task that is done
+    or ended, however long ago, and which no longer exist. The app closes
+    open tabs for both."""
+    wanted = {c for c in chat_ids.split(",") if c}
+    if not wanted:
+        return {"chat_ids": [], "missing": []}
+    user_id = _user_id(request)
+    tasks = await CoordTask.query(user_id=user_id, statuses={"completed", "ended"})
+    existing = {c.id for c in await Chat.get_by_ids(list(wanted)) if c.user_id == user_id}
+    return {
+        "chat_ids": sorted({t.chat_id for t in tasks if t.chat_id in wanted}),
+        "missing": sorted(wanted - existing),
+    }
+
+
 @router.get("/summary")
 async def summary(request: Request, usage: bool = False):
     """Every task agent of this user across all repositories (the Agents

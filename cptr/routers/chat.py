@@ -1210,6 +1210,7 @@ async def delete_chat(request: Request, chat_id: str):
         user_id,
         {
             "chat_id": chat_id,
+            "deleted": True,
             "workspace": workspace or "",
             "workspace_unread_count": unread_counts.get(workspace or "", 0),
         },
