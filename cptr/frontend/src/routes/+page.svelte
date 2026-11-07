@@ -24,7 +24,8 @@
 		setHomeActiveGroup,
 		moveHomeTabToNewSplit,
 		moveHomeTabToGroup,
-		setHomeSplitRatio
+		setHomeSplitRatio,
+		closeTab
 	} from '$lib/stores';
 	import type { Tab, EditorGroup, EditorLayout, SplitDirection, WorkspaceState } from '$lib/stores';
 	import { chatEnabled } from '$lib/stores/chat';
@@ -54,8 +55,65 @@
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { TAB_DRAG_MIME } from '$lib/constants';
 	import { isSupportedWorkspacePath } from '$lib/utils/paths';
+	import { coordinationOf, trackCoordination } from '$lib/stores/coordination.svelte';
+	import { doneTaskChats, MAX_CHAT_TABS, overflowChatTabs, tabsToClose } from '$lib/utils/doneTabs';
+	import { draftTabs } from '$lib/stores/chatDrafts';
+	import { chatStatuses } from '$lib/stores/chat';
+	import { untrack } from 'svelte';
 
 	let showPicker = $state(false);
+
+	// Every chat opened from the sidebar stays open as a tab (listed in the
+	// sidebar, not the tab bar), each one a mounted chat. Keep the most recently
+	// used few per pane.
+	$effect(() => {
+		const groups = $currentWorkspace?.groups ?? [];
+		const busy = new Set<string>();
+		for (const [id, status] of $chatStatuses) if (status.active) busy.add(id);
+		const homeGroups = $homeState.groups;
+		untrack(() => {
+			const opts = { busyChats: busy, draftTabs };
+			for (const tab of overflowChatTabs(groups, MAX_CHAT_TABS, opts))
+				void closeTab(tab.tabId, tab.groupId, { skipUnsavedPrompt: true });
+			for (const tab of overflowChatTabs(homeGroups, MAX_CHAT_TABS, opts))
+				closeHomeTab(tab.tabId, tab.groupId);
+		});
+	});
+
+	// Close the tabs of tasks marked done (or ended) once they're in the
+	// background. The chats are kept; one you open again stays open.
+	const AUTO_CLOSED_KEY = 'computer.doneTaskTabsClosed';
+	function readAutoClosed(): Set<string> {
+		try {
+			return new Set(JSON.parse(localStorage.getItem(AUTO_CLOSED_KEY) || '[]'));
+		} catch {
+			return new Set();
+		}
+	}
+	const autoClosed = readAutoClosed();
+	const coordRoot = $derived($currentWorkspace?.path ?? '');
+	$effect(() => {
+		if (!coordRoot) return;
+		return trackCoordination(coordRoot);
+	});
+	$effect(() => {
+		const coord = coordinationOf(coordRoot);
+		const groups = $currentWorkspace?.groups ?? [];
+		if (!coordRoot || !coord.loaded) return;
+		const close = tabsToClose(groups, doneTaskChats(coord.tasks), autoClosed);
+		if (!close.length) return;
+		untrack(() => {
+			for (const tab of close) {
+				autoClosed.add(tab.chatId);
+				void closeTab(tab.tabId, tab.groupId, { skipUnsavedPrompt: true });
+			}
+			try {
+				localStorage.setItem(AUTO_CLOSED_KEY, JSON.stringify([...autoClosed].slice(-500)));
+			} catch {
+				// storage unavailable: remember for this session only
+			}
+		});
+	});
 	let pendingIntent = $state<LaunchIntent | null>(null);
 	let folderPickerIntent = $state<LaunchIntent | null>(null);
 	let folderPickerWorkspace = $state<string | null>(null);

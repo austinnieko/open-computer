@@ -47,6 +47,8 @@ interface Entry {
 	refs: number;
 	timer: ReturnType<typeof setTimeout> | null;
 	seq: number;
+	/** At least one refresh succeeded, so there is a list worth keeping. */
+	fetched: boolean;
 }
 
 const entries = $state<Record<string, Entry>>({});
@@ -77,6 +79,8 @@ function empty(): CoordState {
 
 /** How long a folder's state is kept after nothing shows it. */
 const CACHE_MS = 10 * 60_000;
+/** A failed refresh tries again this much later while the dashboard is on screen. */
+const RETRY_MS = 5_000;
 
 function ensureListener() {
 	if (listening) return;
@@ -153,11 +157,19 @@ export async function refresh(root: string): Promise<void> {
 		}
 		entry.state.error = '';
 		entry.state.notRepo = false;
+		entry.fetched = true;
 	} catch (error: any) {
 		if (seq !== entry.seq) return;
 		const message = error?.message ?? String(error);
 		entry.state.notRepo = error?.status === 400 && /git repository/i.test(message);
-		entry.state.error = entry.state.notRepo ? '' : message;
+		if (entry.state.notRepo) {
+			entry.state.error = '';
+		} else {
+			// A failed refresh keeps the last list on screen instead of replacing it
+			// with the error; only a first load with nothing to show reports it.
+			if (!entry.fetched) entry.state.error = message;
+			schedule(root, RETRY_MS);
+		}
 	} finally {
 		if (seq === entry.seq) {
 			entry.state.loading = false;
@@ -173,7 +185,7 @@ export function trackCoordination(root: string): () => void {
 	return untrack(() => {
 		ensureListener();
 		if (!entries[root]) {
-			entries[root] = { state: empty(), refs: 0, timer: null, seq: 0 };
+			entries[root] = { state: empty(), refs: 0, timer: null, seq: 0, fetched: false };
 			void refresh(root);
 		} else if (entries[root].refs <= 0) {
 			// Re-attached within the grace period: cancel the pending eviction, refresh.

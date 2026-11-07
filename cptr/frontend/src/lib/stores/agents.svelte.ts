@@ -84,6 +84,8 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let seq = 0;
 let inFlight: Promise<void> | null = null;
 let again = false;
+/** A failed fetch tries again this much later while something shows the list. */
+const RETRY_MS = 5_000;
 
 function apply(data: Awaited<ReturnType<typeof getCoordSummary>>) {
 	state.tasks = data.tasks;
@@ -116,8 +118,10 @@ async function fetchOnce() {
 		if (mine === seq) apply(data);
 	} catch (error: any) {
 		if (mine === seq) {
-			state.error = error?.message ?? String(error);
+			// Keep the last list on screen; only a first load reports the error.
+			if (!state.loaded || state.error) state.error = error?.message ?? String(error);
 			state.loaded = true;
+			schedule(RETRY_MS);
 		}
 	} finally {
 		if (mine === seq) state.loading = false;

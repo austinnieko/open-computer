@@ -3,6 +3,7 @@
  * and intercepts 401 responses to trigger session logout.
  */
 import { clearSession } from '$lib/session';
+import { isNetworkError, retryRead } from '$lib/utils/retryRead';
 
 /** fetch() with credentials: 'include'. Auto-clears session on 401. */
 export async function fetchHandler(path: string, init?: RequestInit): Promise<Response> {
@@ -34,7 +35,18 @@ export async function fetchJSON<T = unknown>(path: string, init?: RequestInit): 
 		'timeout' in AbortSignal
 			? { ...init, signal: AbortSignal.timeout(READ_TIMEOUT_MS) }
 			: init;
-	const res = await fetchHandler(path, timed);
+	// A read whose connection dropped (Safari: "Load failed") is tried again
+	// before the screen shows an error; writes are never repeated.
+	const res =
+		method === 'GET'
+			? await retryRead(() => fetchHandler(path, timed), { signal: timed?.signal }).catch(
+					(error) => {
+						throw isNetworkError(error)
+							? new ApiError(0, "Can't reach the server. Check your connection.")
+							: error;
+					}
+				)
+			: await fetchHandler(path, timed);
 	if (!res.ok) {
 		const data = await res.json().catch(() => ({}));
 		throw new ApiError(res.status, data.detail || data.error || data.message || res.statusText);
