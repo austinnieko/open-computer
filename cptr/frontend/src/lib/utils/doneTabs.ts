@@ -51,7 +51,7 @@ export function tabsToClose(
 }
 
 /** Chat tabs kept per pane; older ones close. */
-export const MAX_CHAT_TABS = 8;
+export const MAX_CHAT_TABS = 4;
 
 /**
  * Chat tabs beyond the most recently used `keep` in each pane. Every chat

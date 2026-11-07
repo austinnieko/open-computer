@@ -13,6 +13,7 @@
 	} from '$lib/stores';
 	import { chatEnabled, chatStatuses, updateChatStatuses } from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
+	import { deletedChats, markChatDeleted } from '$lib/stores/deletedChats';
 	import {
 		deleteChat as apiDeleteChat,
 		getChats,
@@ -88,7 +89,7 @@
 		const out: OpenChat[] = [];
 		for (const g of ws.groups) {
 			for (const t of g.tabs) {
-				if (t.type !== 'chat' || !t.path || seen.has(t.path)) continue;
+				if (t.type !== 'chat' || !t.path || seen.has(t.path) || $deletedChats.has(t.path)) continue;
 				seen.add(t.path);
 				const draft = t.path.startsWith('new-') || t.path.startsWith('pending-');
 				const chat: ChatInfo = known.get(t.path) ?? {
@@ -192,6 +193,24 @@
 		});
 	});
 
+	// A chat deleted here, in another tab or on another device leaves every list.
+	$effect(() => {
+		const deleted = $deletedChats;
+		if (!deleted.size) return;
+		untrack(() => {
+			let changed = false;
+			const next = new Map(wsChatsCache);
+			for (const [path, chats] of next) {
+				const kept = chats.filter((chat) => !deleted.has(chat.id));
+				if (kept.length !== chats.length) {
+					next.set(path, kept);
+					changed = true;
+				}
+			}
+			if (changed) wsChatsCache = next;
+		});
+	});
+
 	// Load sub-agents for every chat listed under an expanded workspace, so the
 	// Agents branches show whether or not that chat is open.
 	const trackedChats = new Map<string, () => void>();
@@ -245,6 +264,8 @@
 				'updated_at',
 				'desc'
 			);
+			const deleted = $deletedChats;
+			if (data.chats?.length) data.chats = data.chats.filter((chat) => !deleted.has(chat.id));
 			wsChatsCache = new Map([
 				...wsChatsCache,
 				[
@@ -365,10 +386,9 @@
 			// Already gone (e.g. deleted elsewhere): still clear the stale row.
 			if ((err as { status?: number })?.status !== 404) throw err;
 		}
-		// An open chat is listed from its tab, so close the tab too or the row stays.
-		for (const o of openChats.filter((o) => o.chat.id === chatId)) closeOpenChat(o);
-		const chats = wsChatsCache.get(wsPath) ?? [];
-		wsChatsCache = new Map([...wsChatsCache, [wsPath, chats.filter((chat) => chat.id !== chatId)]]);
+		// Every list drops it and every tab of it closes (see the page), also a
+		// list fetched before the delete finished.
+		markChatDeleted(chatId);
 		if (currentPath === wsPath && currentChatId === chatId) {
 			goto(`/?workspace=${encodeURIComponent(wsPath)}`);
 		}

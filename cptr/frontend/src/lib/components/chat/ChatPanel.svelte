@@ -42,6 +42,7 @@
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import { trackSubagents } from '$lib/stores/subagents.svelte';
 	import { draftTabs } from '$lib/stores/chatDrafts';
+	import { markChatDeleted } from '$lib/stores/deletedChats';
 	import { setFollowEdits, watchChatEdits } from '$lib/stores/followEdits.svelte';
 	import AgentsPanel from './AgentsPanel.svelte';
 	import LiveProgress from './LiveProgress.svelte';
@@ -538,6 +539,12 @@
 			// Callers don't await this, so a failure here used to vanish as an
 			// unhandled rejection and leave an empty pane with no explanation.
 			if (gen !== loadGeneration) return;
+			if (err?.status === 404) {
+				// Deleted (here or elsewhere): say so, and its tabs close.
+				toast.message($t('chat.deleted'));
+				markChatDeleted(id);
+				return;
+			}
 			console.error('[chat] load failed', err);
 			if (isInitialLoad) toast.error(err?.message || $t('chat.loadFailed'));
 			return;

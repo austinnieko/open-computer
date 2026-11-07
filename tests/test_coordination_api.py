@@ -472,6 +472,37 @@ class OriginFolderTests(ApiTestCase):
         self.assertFalse(self._file(self.repo, task["chat_id"]).exists())
 
 
+class FinishedChatsTests(ApiTestCase):
+    """The app closes open tabs of tasks that are done, however old."""
+
+    async def test_reports_only_the_asked_chats_of_finished_tasks(self):
+        from sqlalchemy import update
+
+        from cptr.models.coordination import CoordTask
+        from cptr.utils.db import get_db
+
+        ids = {}
+        for title, status in (("Done", "completed"), ("Ended", "ended"), ("Open", "queued")):
+            task = (await self.post("/tasks", {"root": str(self.repo), "title": title})).json()
+            chat = f"chat-{title.lower()}"
+            async with await get_db() as db:
+                await db.execute(
+                    update(CoordTask)
+                    .where(CoordTask.id == task["task"]["id"])
+                    .values(status=status, chat_id=chat, updated_at=1)  # finished long ago
+                )
+                await db.commit()
+            ids[title] = chat
+        asked = ",".join([ids["Done"], ids["Open"], "chat-unknown"])
+        res = await self.client.get(f"/api/coordination/finished-chats?chat_ids={asked}")
+        data = res.json()
+        self.assertEqual(data["chat_ids"], [ids["Done"]])
+        # The tasks point at chat ids that were never created: all reported missing.
+        self.assertEqual(data["missing"], sorted([ids["Done"], ids["Open"], "chat-unknown"]))
+        empty = await self.client.get("/api/coordination/finished-chats")
+        self.assertEqual(empty.json(), {"chat_ids": [], "missing": []})
+
+
 class SummaryTests(ApiTestCase):
     """Home's summary lists task agents from every folder of every repository."""
 
