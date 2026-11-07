@@ -314,6 +314,7 @@ class UsageCacheTests(ApiTestCase):
         from cptr.routers import coordination as coord_router
 
         coord_router._chat_usage_cache.clear()
+        coord_router._message_usage_cache.clear()
 
     async def _usage(self, task_id: str) -> dict:
         data = (await self.client.get(f"/api/coordination/usage?root={self.repo}")).json()
@@ -360,6 +361,47 @@ class UsageCacheTests(ApiTestCase):
             await ChatMessage.create(task["chat_id"], "assistant", "b", usage={"input_tokens": 4})
             self.assertEqual((await self._usage(task["id"]))["tokens"], 9)
         self.assertNotIn(task["chat_id"], {k[0] for k in coord_router._chat_usage_cache})
+
+    async def test_a_running_chat_rereads_only_replies_that_changed(self):
+        from unittest import mock
+
+        from cptr.models.chats import ChatMessage
+        from cptr.routers import chat as chat_router
+
+        body = {"root": str(self.repo), "create_chat": True, "model_id": "m", "title": "Busy"}
+        task = (await self.post("/tasks", body)).json()["task"]
+        chat_id = task["chat_id"]
+        for i in range(5):  # finished replies with big tool outputs
+            await ChatMessage.create(
+                chat_id,
+                "assistant",
+                f"r{i}",
+                output=[{"type": "function_call", "call_id": f"c{i}", "name": "x"}],
+                usage={"input_tokens": 10},
+            )
+        live = await ChatMessage.create(
+            chat_id, "assistant", "", done=False, usage={"input_tokens": 1}
+        )
+        real = chat_router._tally_messages
+        with (
+            mock.patch("cptr.utils.chat_task.get_active_chat_ids", return_value={chat_id}),
+            mock.patch.object(chat_router, "_tally_messages", side_effect=real) as tally,
+        ):
+            first = await self._usage(task["id"])
+            self.assertEqual((first["tokens"], first["tool_calls"], first["turns"]), (51, 5, 6))
+            self.assertEqual(tally.call_count, 6)
+
+            tally.reset_mock()
+            await ChatMessage.update(live.id, content="streaming…", usage={"input_tokens": 4})
+            again = await self._usage(task["id"])
+            self.assertEqual(again["tokens"], 54)
+            self.assertEqual(tally.call_count, 1)  # only the reply still being written
+
+            tally.reset_mock()
+            first_reply = (await ChatMessage.get_all_by_chat(chat_id))[0]
+            await ChatMessage.update(first_reply.id, content="edited and longer")
+            await self._usage(task["id"])
+            self.assertEqual(tally.call_count, 2)  # the edited reply and the live one
 
 
 class OriginFolderTests(ApiTestCase):
