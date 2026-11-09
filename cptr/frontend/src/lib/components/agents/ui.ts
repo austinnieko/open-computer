@@ -7,7 +7,7 @@ export type AgentGroup = 'attention' | 'running' | 'waiting' | 'review' | 'done'
 export const GROUPS: { key: AgentGroup; states: AgentState[]; icon: string }[] = [
 	{ key: 'attention', states: ['needs_you', 'blocked'], icon: 'info' },
 	{ key: 'running', states: ['working', 'background'], icon: 'play' },
-	{ key: 'waiting', states: ['in_line', 'stopped', 'draft'], icon: 'clock' },
+	{ key: 'waiting', states: ['in_line', 'stopped', 'idle', 'draft'], icon: 'clock' },
 	{ key: 'review', states: ['review'], icon: 'git-diff' },
 	{ key: 'done', states: ['done', 'ended'], icon: 'check' }
 ];
@@ -22,6 +22,7 @@ export const SWATCH: Record<AgentState, string> = {
 	background: 'bg-sky-400',
 	in_line: 'bg-slate-400',
 	stopped: 'bg-slate-300 dark:bg-slate-600',
+	idle: 'bg-slate-300 dark:bg-slate-600',
 	review: 'bg-violet-500',
 	draft: 'bg-slate-200 dark:bg-slate-700',
 	done: 'bg-emerald-500',
@@ -36,6 +37,7 @@ export const PILL: Record<AgentState, string> = {
 	background: 'bg-sky-500/12 text-sky-700 ring-sky-500/25 dark:text-sky-300',
 	in_line: 'bg-slate-500/10 text-slate-600 ring-slate-500/20 dark:text-slate-300',
 	stopped: 'bg-slate-500/8 text-slate-500 ring-slate-500/15 dark:text-slate-400',
+	idle: 'bg-slate-500/8 text-slate-500 ring-slate-500/15 dark:text-slate-400',
 	review: 'bg-violet-500/12 text-violet-700 ring-violet-500/25 dark:text-violet-300',
 	draft: 'bg-transparent text-slate-500 ring-slate-400/40 dark:text-slate-400',
 	done: 'bg-emerald-500/12 text-emerald-700 ring-emerald-500/25 dark:text-emerald-300',

@@ -9,6 +9,10 @@ Run: uv run python -m unittest tests.test_coordination_lifecycle -v
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
+import time
+import unittest
 from pathlib import Path
 
 from cptr.models import ChatMessage
@@ -45,6 +49,26 @@ class ParseCheckoutTests(Phase2TestCase):
         text = "CHECKOUT: continuing - exploring\n...\nCHECKOUT: done - finished"
         self.assertEqual(lifecycle.parse_checkout(text)["kind"], "done")
         self.assertIsNone(lifecycle.parse_checkout("No report here."))
+
+
+class WorktreeActivityTests(unittest.TestCase):
+    def test_fresh_stale_skipped_and_missing_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertFalse(lifecycle.worktree_recent_activity(str(root)))
+            self.assertFalse(lifecycle.worktree_recent_activity(None))
+            self.assertFalse(lifecycle.worktree_recent_activity("/nonexistent/xyz"))
+            (root / "src").mkdir()
+            (root / "src" / "a.py").write_text("x = 1\n")
+            self.assertTrue(lifecycle.worktree_recent_activity(str(root)))
+            old = time.time() - 2 * lifecycle.WORK_ACTIVITY_WINDOW_S
+            for path in root.rglob("*"):
+                os.utime(path, (old, old))
+            self.assertFalse(lifecycle.worktree_recent_activity(str(root)))
+            # Fresh files under cache dirs never count as agent work.
+            (root / "__pycache__").mkdir()
+            (root / "__pycache__" / "a.cpython-312.pyc").write_text("x\n")
+            self.assertFalse(lifecycle.worktree_recent_activity(str(root)))
 
 
 class SettledTestCase(Phase2TestCase):
@@ -91,13 +115,39 @@ class CheckoutTests(SettledTestCase):
             {**task.meta["checkout"], "kind": "needs-input", "note": "v1 or v2?"},
         )
 
+    def _age_worktree(self, task: CoordTask) -> None:
+        """Backdate every file in the task's worktree: no recent activity."""
+        old = time.time() - 2 * lifecycle.WORK_ACTIVITY_WINDOW_S
+        for path in Path(task.worktree_path).rglob("*"):
+            os.utime(path, (old, old))
+
     async def test_no_checkout_is_reported_as_such(self):
         task = await self._running("Quiet")
         await self._reply(task.chat_id, "I looked around.")
+        self._age_worktree(task)  # nothing touched recently: a real no-report
         await coordinator.on_turn_end(task.chat_id, grace=0)
         task = await CoordTask.get_by_id(task.id)
         self.assertEqual(task.status, "queued")
         self.assertEqual(task.meta["checkout"]["kind"], "none")
+
+    async def test_recent_worktree_activity_without_checkout_counts_as_continuing(self):
+        task = await self._running("Quiet worker")
+        await self._reply(task.chat_id, "Wrote the parser; committing next.")
+        (Path(task.worktree_path) / "parser.py").write_text("x = 1\n")
+        await coordinator.on_turn_end(task.chat_id, grace=0)
+        task = await CoordTask.get_by_id(task.id)
+        self.assertEqual(task.status, "queued")
+        self.assertEqual(task.meta["checkout"]["kind"], "continuing")
+        self.assertTrue(task.meta["checkout"]["stalled"])
+
+    async def test_explicit_checkout_wins_over_worktree_activity(self):
+        task = await self._running("Explicit")
+        await self._reply(task.chat_id, "CHECKOUT: needs-input - v1 or v2?")
+        (Path(task.worktree_path) / "notes.md").write_text("wip\n")
+        await coordinator.on_turn_end(task.chat_id, grace=0)
+        task = await CoordTask.get_by_id(task.id)
+        self.assertEqual(task.meta["checkout"]["kind"], "needs-input")
+        self.assertNotIn("stalled", task.meta["checkout"])
 
     async def test_continuing_with_nothing_running_is_flagged_stalled(self):
         task = await self._running("Stall")

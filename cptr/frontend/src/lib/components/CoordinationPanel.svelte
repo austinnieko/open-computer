@@ -258,6 +258,7 @@
 		needs_you: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
 		blocked: 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300',
 		stopped: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400',
+		idle: 'bg-gray-100 text-gray-500 dark:bg-white/6 dark:text-gray-400',
 		draft:
 			'border border-dashed border-gray-300 text-gray-500 dark:border-white/15 dark:text-gray-400',
 		review: 'bg-violet-50 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300',

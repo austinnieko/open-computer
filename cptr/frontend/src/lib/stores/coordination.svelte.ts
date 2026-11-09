@@ -287,6 +287,7 @@ export type TaskActivity =
 	| 'needs_you'
 	| 'blocked'
 	| 'stopped'
+	| 'idle'
 	| null;
 export type TaskAction =
 	| 'start'
@@ -413,7 +414,14 @@ export function lifecycleOf(
 			stage: 'active',
 			// "continuing" with nothing visible running: the agent's own background
 			// work (e.g. an OpenCode sub-agent) is invisible here, so don't alarm.
-			activity: kind === 'stalled' ? 'background' : 'needs_you',
+			// A missing check-out is likewise not an alarm: the agent may simply
+			// have forgotten the line, so show it as idle, not "Needs you".
+			activity:
+				kind === 'stalled'
+					? 'background'
+					: kind === 'needs-input' || kind === 'blocked'
+						? 'needs_you'
+						: 'idle',
 			detailKey: key,
 			detailText: checkout?.note || undefined,
 			action: 'reply'
@@ -442,7 +450,8 @@ export function lifecycleTone(life: TaskLifecycle): string {
 		background: 'waiting',
 		needs_you: 'attention',
 		blocked: 'failed',
-		stopped: 'neutral'
+		stopped: 'neutral',
+		idle: 'neutral'
 	};
 	return tones[life.activity];
 }

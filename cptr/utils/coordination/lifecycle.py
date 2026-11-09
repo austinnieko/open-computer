@@ -25,7 +25,10 @@ dependency's check-out note, branch and changed files.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import time
+from pathlib import Path
 from typing import Any
 
 from cptr.models.coordination import CoordTask, CoordTaskDep
@@ -39,6 +42,67 @@ _CHECKOUT_RE = re.compile(
     r"(?:[-–—:]\s*)?(.*)$",
     re.IGNORECASE | re.MULTILINE,
 )
+
+# How fresh a worktree change must be to count as "the agent is still on it".
+WORK_ACTIVITY_WINDOW_S = 600
+# Directories that never mean agent work (build output, caches, tooling state).
+# Matched by name anywhere in the tree, so a project whose real source lives in
+# a directory with one of these names is never seen as active.
+_WORK_ACTIVITY_SKIP = {
+    ".git",
+    ".cptr",
+    ".cache",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+}
+# Cap the scan so a huge tree cannot stall turn-end bookkeeping. If the budget
+# runs out before a fresh file is found the answer is "no activity" — i.e. the
+# pre-heuristic behaviour (a possible "Needs you"), never a wrong "still working".
+# Large-but-not-huge trees stay covered: 20k stats is single-digit milliseconds
+# on local disk.
+_WORK_ACTIVITY_MAX_FILES = 20_000
+
+
+def worktree_recent_activity(
+    worktree_path: str | None, window_s: int = WORK_ACTIVITY_WINDOW_S
+) -> bool:
+    """True if a file under the worktree (outside caches) changed within ``window_s``.
+
+    Used when an agent ends a turn without a check-out line: fresh edits mean it
+    was almost certainly still working, so the coordinator treats the turn as
+    "continuing" instead of raising a "Needs you" flag. Best-effort: any error
+    reading the tree counts as no activity.
+    """
+    if not worktree_path:
+        return False
+    root = Path(worktree_path)
+    if not root.is_dir():
+        return False
+    cutoff = time.time() - window_s
+    checked = 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in _WORK_ACTIVITY_SKIP]
+            for name in filenames:
+                checked += 1
+                if checked > _WORK_ACTIVITY_MAX_FILES:
+                    return False
+                try:
+                    if os.stat(os.path.join(dirpath, name)).st_mtime > cutoff:
+                        return True
+                except OSError:
+                    continue
+    except OSError:
+        return False
+    return False
+
 
 CHECKOUT_INSTRUCTIONS = (
     "\n\n[Coordinator] End every reply with exactly one check-out line, on its own line:\n"
