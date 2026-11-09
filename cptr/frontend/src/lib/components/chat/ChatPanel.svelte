@@ -55,6 +55,7 @@
 	import {
 		currentWorkspace,
 		openChatTab,
+		openOpenTerminalInSplit,
 		streamingBehavior,
 		toolApprovalMode as defaultToolApprovalMode,
 		widescreenMode
@@ -401,7 +402,8 @@
 	// browser font, a fixed px cutoff docks the panel on top of the messages.
 	// 42rem + 2 × 19rem (dock + inset + 1rem gap) = 80rem; 82rem leaves room
 	// for the scrollbar.
-	const STATS_DOCK_REM = 82;
+	// Chat column (~32rem) plus the stats column (~18.5rem).
+	const STATS_DOCK_REM = 50;
 	let remPx = $state(16);
 	$effect(() => {
 		const root = document.documentElement;
@@ -421,10 +423,12 @@
 	function setStatsPref(on: boolean) {
 		chatStatsOn.set(on);
 	}
-	const statsDocked = $derived(!$widescreenMode && panelWidth >= STATS_DOCK_WIDTH);
+	const statsDocked = $derived(panelWidth >= STATS_DOCK_WIDTH);
 	const statsVisible = $derived(
 		!!chatId && !chatId.startsWith('new-') && (statsDocked ? statsOn : statsOverlay)
 	);
+	// Docked stats is a fixed column: messages and input leave room for it.
+	const statsReserve = $derived(statsDocked && statsVisible ? 'padding-right: 18.5rem;' : '');
 	function toggleStats() {
 		if (statsDocked) setStatsPref(!statsOn);
 		else statsOverlay = !statsOverlay;
@@ -2030,6 +2034,15 @@
 				<button
 					type="button"
 					class="relative flex size-6 shrink-0 items-center justify-center rounded-lg transition-colors duration-75 {statusButtonClass}"
+					aria-label="Open Terminal"
+					use:tooltip={'Open Terminal'}
+					onclick={() => openOpenTerminalInSplit()}
+				>
+					<Icon name="terminal" size={14} />
+				</button>
+				<button
+					type="button"
+					class="relative flex size-6 shrink-0 items-center justify-center rounded-lg transition-colors duration-75 {statusButtonClass}"
 					aria-label={$t('bar.newChat')}
 					title={$t('bar.newChat')}
 					use:tooltip={$t('bar.newChat')}
@@ -2123,7 +2136,7 @@
 			<div
 				bind:this={messagesEl}
 				class="flex-1 overflow-y-auto"
-				style="background: var(--app-bg); color: var(--app-fg);"
+				style="background: var(--app-bg); color: var(--app-fg); {statsReserve}"
 				onscroll={handleMessagesScroll}
 			>
 				<div
@@ -2186,7 +2199,7 @@
 		{/if}
 
 		<!-- Input area -->
-		<div class="px-4 py-3" style="background: var(--app-bg);">
+		<div class="px-4 py-3" style="background: var(--app-bg); {statsReserve}">
 			<div class="{$widescreenMode ? 'max-w-full' : 'max-w-2xl'} mx-auto w-full relative">
 				{#if !autoScroll && activePath.length > 0}
 					<div
@@ -2283,7 +2296,7 @@
 		position: absolute;
 		top: 2.75rem;
 		right: 1rem;
-		bottom: 8rem;
+		bottom: 0.75rem;
 		width: 17rem;
 		z-index: 20;
 		overflow-y: auto;

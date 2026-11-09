@@ -843,7 +843,7 @@
 			const tab = group.tabs.find((t) => t.id === group.activeTabId);
 			if (tab && tab.type === 'terminal' && !tab.sessionId) {
 				initingTerminal = true;
-				createSession(ws.path)
+				createSession(ws.path, tab.target)
 					.then((data) => {
 						currentWorkspace.update((w) => {
 							if (!w) return w;

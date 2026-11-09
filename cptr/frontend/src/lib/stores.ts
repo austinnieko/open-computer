@@ -67,6 +67,8 @@ export interface Tab {
 	edit?: boolean;
 	path?: string; // generic path (e.g. for chat)
 	sessionId?: string;
+	/** Terminal backend: unset = host shell, 'open-terminal' = the Open Terminal container. */
+	target?: 'open-terminal';
 	port?: number; // legacy preview port, migrated on load
 	browserSessionId?: string;
 	unsaved?: boolean;
@@ -1192,6 +1194,47 @@ export async function openTerminalTab(targetGroupId?: string): Promise<void> {
 	} catch (e) {
 		console.error('Failed to create terminal:', e);
 	}
+}
+
+/** Show the Open Terminal container shell in a pane beside the current one. */
+export async function openOpenTerminalInSplit(direction?: SplitDirection): Promise<void> {
+	const ws = get(currentWorkspace);
+	if (!ws) return;
+	for (const g of ws.groups) {
+		const existing = g.tabs.find((t) => t.type === 'terminal' && t.target === 'open-terminal');
+		if (existing) {
+			setActiveTab(existing.id, g.id);
+			return;
+		}
+	}
+	let sessionId: string;
+	try {
+		sessionId = (await createSession(ws.path, 'open-terminal')).session_id;
+	} catch (e) {
+		console.error('Failed to open Open Terminal:', e);
+		return;
+	}
+	const tab: Tab = {
+		id: nextId(),
+		type: 'terminal',
+		label: 'Open Terminal',
+		sessionId,
+		target: 'open-terminal'
+	};
+	const group: EditorGroup = { id: nextId(), tabs: [tab], activeTabId: tab.id };
+	const dir = direction ?? ws.splitDirection ?? 'horizontal';
+	currentWorkspace.update((current) =>
+		current
+			? {
+					...current,
+					groups: [...current.groups, group],
+					activeGroupId: group.id,
+					layout: splitLayout(current.layout, current.activeGroupId, group.id, dir),
+					splitDirection: dir,
+					splitRatio: current.splitRatio ?? 0.5
+				}
+			: current
+	);
 }
 
 export async function openPreviewTab(port: number, targetGroupId?: string): Promise<void> {
