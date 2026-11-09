@@ -2184,6 +2184,13 @@ async def run_chat_task(
         except Exception:
             chat_models_config = {}
         builtin_tools = resolve_builtin_tools_config(chat_models_config, model, configured_model)
+        # A prefixed model id (e.g. "glm-coder/GLM-5.3") is a named variant with its
+        # own settings; prefer its entry over the upstream model's.
+        settings_model = (
+            configured_model
+            if configured_model and isinstance(chat_models_config.get(configured_model), dict)
+            else model
+        )
         provider_type = (
             "llama.cpp"
             if provider == "openai" and connection.get("provider_type") == "llama.cpp"
@@ -2203,7 +2210,7 @@ async def run_chat_task(
         system = await _load_system_prompt(
             request,
             tool_workspace,
-            model,
+            settings_model,
             user_id=user_id,
             current_message=memory_message,
             recent_messages=messages,
@@ -2461,7 +2468,7 @@ async def run_chat_task(
         global_params = chat_models_config.get("*", {}).get("params", {})
         if not isinstance(global_params, dict):
             global_params = {}
-        model_params = chat_models_config.get(model, {}).get("params", {})
+        model_params = chat_models_config.get(settings_model, {}).get("params", {})
         if not isinstance(model_params, dict):
             model_params = {}
         global_rp = global_params.get("request_params") or {}

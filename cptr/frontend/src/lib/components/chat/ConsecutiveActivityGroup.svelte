@@ -5,6 +5,7 @@
 	import { expandToolDetails } from '$lib/stores';
 	import ReasoningCollapsible from './ReasoningCollapsible.svelte';
 	import ToolCallCollapsible from './ToolCallCollapsible.svelte';
+	import LazyRender from './LazyRender.svelte';
 	import { buildRuns, currentRun, summarizeRuns, type ActivityRun } from '$lib/utils/agentActivity';
 
 	interface Props {
@@ -316,22 +317,25 @@
 			{#snippet rawEntries(list: any[], prefix: string)}
 				<div class="mb-0.5 space-y-0.5 mt-1">
 					{#each list as item, entryIdx}
-						{#if item.type === 'reasoning'}
-							<ReasoningCollapsible
-								{item}
-								fallbackId={`reasoning-${groupIdx}-${prefix}-${entryIdx}`}
-							/>
-						{:else}
-							<ToolCallCollapsible
-								{item}
-								pairedOutput={outputs.get(item.call_id)}
-								{done}
-								{chatId}
-								{messageId}
-								{toolLabel}
-								{onapprove}
-							/>
-						{/if}
+						<!-- Long step lists mount entries as they scroll into view. -->
+						<LazyRender eager={list.length <= 40 || entryIdx >= list.length - 15} estimate={28}>
+							{#if item.type === 'reasoning'}
+								<ReasoningCollapsible
+									{item}
+									fallbackId={`reasoning-${groupIdx}-${prefix}-${entryIdx}`}
+								/>
+							{:else}
+								<ToolCallCollapsible
+									{item}
+									pairedOutput={outputs.get(item.call_id)}
+									{done}
+									{chatId}
+									{messageId}
+									{toolLabel}
+									{onapprove}
+								/>
+							{/if}
+						</LazyRender>
 					{/each}
 				</div>
 			{/snippet}

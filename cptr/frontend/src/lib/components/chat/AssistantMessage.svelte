@@ -12,6 +12,7 @@
 	import FileChangeCard from './FileChangeCard.svelte';
 	import { fileEditFromCall } from '$lib/utils/fileEdits';
 	import ToolCallCollapsible from './ToolCallCollapsible.svelte';
+	import LazyRender from './LazyRender.svelte';
 	import { currentWorkspace, openFileTab } from '$lib/stores';
 	import { ttsConfigured, ttsEnabled } from '$lib/stores/audio';
 	import { tooltip } from '$lib/tooltip';
@@ -362,6 +363,14 @@
 		return cleaned.replace(/\n{3,}/g, '\n\n').trim();
 	}
 
+	// Long agent replies: mount steps only as they scroll into view. Short replies
+	// and the newest steps always render right away.
+	const LAZY_MIN_ITEMS = 40;
+	const EAGER_TAIL_ITEMS = 20;
+	function eagerItem(index: number, total: number): boolean {
+		return total <= LAZY_MIN_ITEMS || index >= total - EAGER_TAIL_ITEMS;
+	}
+
 	const displayItems = $derived.by((): DisplayItem[] => {
 		if (!output?.length) return [];
 
@@ -521,142 +530,144 @@
 					<MarkdownRenderer {content} />
 				{/if}
 				{#each displayItems as displayItem, groupIdx}
-					{#if displayItem.type === 'message_item'}
-						{@const messageText = stripStructuredImageMarkdown(messageItemText(displayItem.item))}
-						{#if messageText}
-							<MarkdownRenderer content={messageText} />
-						{/if}
-					{:else if displayItem.type === 'artifact_item'}
-						{@const artifact = displayItem.item}
-						{@const preview = (artifact.content || '').replace(/^#.*\n*/m, '').trim()}
-						<button
-							class="block w-full min-w-0 overflow-hidden text-left my-2 rounded-xl cursor-pointer
-						border border-gray-200 dark:border-white/8
-						hover:border-gray-300 dark:hover:border-white/12
-						hover:bg-gray-50/50 dark:hover:bg-white/[0.03]
-						transition-colors duration-150 {preview ? 'h-[4.375rem]' : 'h-[2.375rem]'}"
-							onclick={() => openArtifact(artifact)}
-						>
-							<div class="h-full min-w-0 overflow-hidden px-3 py-2.5">
-								<div
-									class="h-4 truncate text-xs leading-4 font-medium text-gray-800 dark:text-gray-100"
-								>
-									{artifact.title || $t('chat.artifact')}
-								</div>
-								{#if preview}
-									<div class="h-8 overflow-hidden">
-										<div
-											class="line-clamp-2 break-words text-[0.625rem] leading-4 font-normal text-gray-400 dark:text-gray-500"
-										>
-											{preview}
-										</div>
+					<LazyRender eager={eagerItem(groupIdx, displayItems.length)}>
+						{#if displayItem.type === 'message_item'}
+							{@const messageText = stripStructuredImageMarkdown(messageItemText(displayItem.item))}
+							{#if messageText}
+								<MarkdownRenderer content={messageText} />
+							{/if}
+						{:else if displayItem.type === 'artifact_item'}
+							{@const artifact = displayItem.item}
+							{@const preview = (artifact.content || '').replace(/^#.*\n*/m, '').trim()}
+							<button
+								class="block w-full min-w-0 overflow-hidden text-left my-2 rounded-xl cursor-pointer
+							border border-gray-200 dark:border-white/8
+							hover:border-gray-300 dark:hover:border-white/12
+							hover:bg-gray-50/50 dark:hover:bg-white/[0.03]
+							transition-colors duration-150 {preview ? 'h-[4.375rem]' : 'h-[2.375rem]'}"
+								onclick={() => openArtifact(artifact)}
+							>
+								<div class="h-full min-w-0 overflow-hidden px-3 py-2.5">
+									<div
+										class="h-4 truncate text-xs leading-4 font-medium text-gray-800 dark:text-gray-100"
+									>
+										{artifact.title || $t('chat.artifact')}
 									</div>
+									{#if preview}
+										<div class="h-8 overflow-hidden">
+											<div
+												class="line-clamp-2 break-words text-[0.625rem] leading-4 font-normal text-gray-400 dark:text-gray-500"
+											>
+												{preview}
+											</div>
+										</div>
+									{/if}
+								</div>
+							</button>
+						{:else if displayItem.type === 'image_item'}
+							<div class="my-2 grid max-w-xl grid-cols-1 gap-2 sm:grid-cols-2">
+								{#each displayItem.item.images || [] as image}
+									<a
+										href={image.url}
+										target="_blank"
+										rel="noreferrer"
+										class="block overflow-hidden rounded-lg border border-gray-200 dark:border-white/8 bg-gray-50 dark:bg-white/[0.03]"
+									>
+										<img
+											src={image.url}
+											alt={image.name || 'Generated image'}
+											class="max-h-96 w-full object-contain"
+										/>
+									</a>
+								{/each}
+							</div>
+						{:else if displayItem.type === 'file_item'}
+							{@const file = displayItem.item}
+							{@const filePath = resolvedFilePath(file)}
+							{@const fileKey = filePath || file.path || `file-${displayItem.index}`}
+							{@const collapsed = Boolean(collapsedFiles[fileKey])}
+							<div
+								class="my-2 w-full max-w-2xl overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-white/8 dark:bg-gray-950/20"
+							>
+								<div
+									class="flex h-8 items-center {collapsed
+										? ''
+										: 'border-b border-gray-100 dark:border-white/8'}"
+								>
+									<button
+										type="button"
+										class="flex h-full min-w-0 flex-1 items-center gap-2 px-2.5 text-left"
+										onclick={() => toggleFile(fileKey)}
+										aria-expanded={!collapsed}
+									>
+										<div
+											class="flex size-5 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400"
+										>
+											<Icon name={fileIconName(file.name || file.path || '', 'file')} size={14} />
+										</div>
+										<div
+											class="min-w-0 flex-1 truncate text-xs font-medium text-gray-800 dark:text-gray-100"
+										>
+											{file.name || shortPath(file.path)}
+										</div>
+									</button>
+									<button
+										type="button"
+										class="mr-1 flex size-6 shrink-0 items-center justify-center rounded text-gray-400 transition-colors hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-200"
+										onclick={(event) => {
+											event.stopPropagation();
+											if (filePath) openFileTab(filePath);
+										}}
+										aria-label={$t('directory.open', { name: file.name || shortPath(file.path) })}
+										use:tooltip={$t('chat.openAsTab')}
+									>
+										<Icon name="external-link" size={13} />
+									</button>
+								</div>
+								{#if !collapsed}
+									<ChatFilePreview {file} {filePath} />
 								{/if}
 							</div>
-						</button>
-					{:else if displayItem.type === 'image_item'}
-						<div class="my-2 grid max-w-xl grid-cols-1 gap-2 sm:grid-cols-2">
-							{#each displayItem.item.images || [] as image}
-								<a
-									href={image.url}
-									target="_blank"
-									rel="noreferrer"
-									class="block overflow-hidden rounded-lg border border-gray-200 dark:border-white/8 bg-gray-50 dark:bg-white/[0.03]"
-								>
-									<img
-										src={image.url}
-										alt={image.name || 'Generated image'}
-										class="max-h-96 w-full object-contain"
+						{:else if displayItem.type === 'file_change_item'}
+							<FileChangeCard
+								item={displayItem.item}
+								edit={displayItem.edit}
+								pairedOutput={displayItem.output}
+							/>
+						{:else if displayItem.type === 'subagent_item'}
+							<SubagentCard item={displayItem.item} pairedOutput={displayItem.output} {chatId} />
+						{:else if displayItem.type === 'activity_group'}
+							{#if displayItem.entries.length === 1}
+								{@const item = displayItem.entries[0]}
+								{#if item.type === 'reasoning'}
+									<ReasoningCollapsible {item} fallbackId={`reasoning-${groupIdx}-0`} />
+								{:else}
+									<ToolCallCollapsible
+										{item}
+										pairedOutput={displayItem.outputs.get(item.call_id)}
+										{done}
+										{chatId}
+										{messageId}
+										{toolLabel}
+										{onapprove}
 									/>
-								</a>
-							{/each}
-						</div>
-					{:else if displayItem.type === 'file_item'}
-						{@const file = displayItem.item}
-						{@const filePath = resolvedFilePath(file)}
-						{@const fileKey = filePath || file.path || `file-${displayItem.index}`}
-						{@const collapsed = Boolean(collapsedFiles[fileKey])}
-						<div
-							class="my-2 w-full max-w-2xl overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-white/8 dark:bg-gray-950/20"
-						>
-							<div
-								class="flex h-8 items-center {collapsed
-									? ''
-									: 'border-b border-gray-100 dark:border-white/8'}"
-							>
-								<button
-									type="button"
-									class="flex h-full min-w-0 flex-1 items-center gap-2 px-2.5 text-left"
-									onclick={() => toggleFile(fileKey)}
-									aria-expanded={!collapsed}
-								>
-									<div
-										class="flex size-5 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400"
-									>
-										<Icon name={fileIconName(file.name || file.path || '', 'file')} size={14} />
-									</div>
-									<div
-										class="min-w-0 flex-1 truncate text-xs font-medium text-gray-800 dark:text-gray-100"
-									>
-										{file.name || shortPath(file.path)}
-									</div>
-								</button>
-								<button
-									type="button"
-									class="mr-1 flex size-6 shrink-0 items-center justify-center rounded text-gray-400 transition-colors hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-200"
-									onclick={(event) => {
-										event.stopPropagation();
-										if (filePath) openFileTab(filePath);
-									}}
-									aria-label={$t('directory.open', { name: file.name || shortPath(file.path) })}
-									use:tooltip={$t('chat.openAsTab')}
-								>
-									<Icon name="external-link" size={13} />
-								</button>
-							</div>
-							{#if !collapsed}
-								<ChatFilePreview {file} {filePath} />
-							{/if}
-						</div>
-					{:else if displayItem.type === 'file_change_item'}
-						<FileChangeCard
-							item={displayItem.item}
-							edit={displayItem.edit}
-							pairedOutput={displayItem.output}
-						/>
-					{:else if displayItem.type === 'subagent_item'}
-						<SubagentCard item={displayItem.item} pairedOutput={displayItem.output} {chatId} />
-					{:else if displayItem.type === 'activity_group'}
-						{#if displayItem.entries.length === 1}
-							{@const item = displayItem.entries[0]}
-							{#if item.type === 'reasoning'}
-								<ReasoningCollapsible {item} fallbackId={`reasoning-${groupIdx}-0`} />
+								{/if}
 							{:else}
-								<ToolCallCollapsible
-									{item}
-									pairedOutput={displayItem.outputs.get(item.call_id)}
+								<ConsecutiveActivityGroup
+									entries={displayItem.entries}
+									calls={displayItem.calls}
+									reasoning={displayItem.reasoning}
+									outputs={displayItem.outputs}
 									{done}
 									{chatId}
 									{messageId}
+									{groupIdx}
 									{toolLabel}
 									{onapprove}
 								/>
 							{/if}
-						{:else}
-							<ConsecutiveActivityGroup
-								entries={displayItem.entries}
-								calls={displayItem.calls}
-								reasoning={displayItem.reasoning}
-								outputs={displayItem.outputs}
-								{done}
-								{chatId}
-								{messageId}
-								{groupIdx}
-								{toolLabel}
-								{onapprove}
-							/>
 						{/if}
-					{/if}
+					</LazyRender>
 				{/each}
 				{#if done && unrenderedContent && displayItems.length > 0}
 					{@const leftoverText = stripStructuredImageMarkdown(unrenderedContent)}

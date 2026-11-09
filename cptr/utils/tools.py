@@ -3042,7 +3042,12 @@ async def _load_tool_servers() -> dict:
                 openapi_spec = await fetch_openapi_spec(spec_url, headers)
                 server["_openapi_spec"] = openapi_spec
 
+                # Optional allowlist of operationIds, to expose only some of a
+                # large API (e.g. an Open Terminal's core file/command tools).
+                allowed = set(server.get("allowed_tools") or [])
                 for spec in convert_openapi_to_tool_specs(openapi_spec):
+                    if allowed and spec["name"] not in allowed:
+                        continue
                     prefixed = f"{server_id}_{spec['name']}"
                     tools[prefixed] = {
                         "server": server,
