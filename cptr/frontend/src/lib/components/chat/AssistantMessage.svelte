@@ -684,6 +684,16 @@
 					></span>
 				{/if}
 			{/if}
+			{#if done && meta?.error}
+				<!-- The reply ended early (e.g. the server restarted mid-run); say so
+				     instead of leaving it looking finished. -->
+				<p
+					class="mt-2 text-xs text-amber-700 dark:text-amber-400"
+					role="status"
+				>
+					{$t('chat.replyInterrupted', { reason: String(meta.error) })}
+				</p>
+			{/if}
 		</div>
 
 		<!-- Controls toolbar -->
