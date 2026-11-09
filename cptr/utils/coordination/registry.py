@@ -232,7 +232,23 @@ async def _base_branch(
     from cptr.utils.git import _run
 
     if base_ref and base_ref != "HEAD":
-        return base_ref if await wt.branch_exists(repo_root, base_ref, identity) else None
+        if await wt.branch_exists(repo_root, base_ref, identity):
+            return base_ref
+        # "main" that only exists as origin/main (common in a fresh clone whose
+        # checkout sits on a feature branch): create the local tracking branch
+        # so the task starts from, and integrates back into, main.
+        code, _, _ = await _run(
+            "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{base_ref}",
+            cwd=repo_root, check=False, identity=identity,
+        )
+        if code == 0:
+            code, _, _ = await _run(
+                "branch", "--track", base_ref, f"origin/{base_ref}",
+                cwd=repo_root, check=False, identity=identity,
+            )
+            if code == 0:
+                return base_ref
+        return None
     code, out, _ = await _run(
         "symbolic-ref", "--quiet", "--short", "HEAD", cwd=repo_root, check=False, identity=identity
     )
