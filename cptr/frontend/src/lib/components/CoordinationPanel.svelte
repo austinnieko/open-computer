@@ -120,25 +120,62 @@
 			: coord.tasks
 	);
 
-	// "Start from" branches for New task: this workspace's local branches, its
-	// current branch first. Task and integration branches are left out.
+	// New task can target any open workspace (repo); this one by default. The
+	// task still gets its own branch and worktree in the chosen repo.
+	let taskRepo = $state('');
+	const taskRoot = $derived(taskRepo || root);
+	const otherRepo = $derived(norm(taskRoot) !== norm(root));
+	const repoOptions = $derived.by(() => {
+		const seen = new Set<string>();
+		const list: { path: string; name: string }[] = [];
+		for (const w of [{ path: root, name: '' }, ...$workspaceList]) {
+			const key = norm(w.path);
+			if (!w.path || seen.has(key)) continue;
+			seen.add(key);
+			list.push({ path: w.path, name: w.name || w.path.split('/').pop() || w.path });
+		}
+		return list;
+	});
+
+	// "Start from" branches for New task: the chosen repo's local branches.
+	// Task and integration branches are left out. The default is the repo's
+	// main branch (main, else master), not whatever the checkout is on.
 	let baseOptions = $state<string[]>([]);
 	$effect(() => {
 		if (!showNewTask) return;
-		const path = root;
+		const path = taskRoot;
 		getGitBranches(path)
 			.then((data: any) => {
+				if (path !== taskRoot) return;
 				const local: string[] = (data?.local ?? []).filter(
 					(b: string) => !b.startsWith('task/') && !b.startsWith('coord/')
 				);
 				const current: string = data?.current ?? '';
 				baseOptions = current && !local.includes(current) ? [current, ...local] : local;
-				if (!form.base) form.base = current || baseOptions[0] || '';
+				// No local main/master but the remote has one: offer it; the server
+				// creates the local tracking branch when the task starts.
+				const remote: string[] = data?.remote ?? [];
+				for (const b of ['main', 'master']) {
+					if (!baseOptions.includes(b) && remote.includes(`origin/${b}`)) {
+						baseOptions = [b, ...baseOptions];
+						break;
+					}
+				}
+				const mainBranch = ['main', 'master'].find((b) => baseOptions.includes(b));
+				if (!form.base || !baseOptions.includes(form.base))
+					form.base = mainBranch || current || baseOptions[0] || '';
 			})
 			.catch(() => {
 				baseOptions = [];
+				form.base = '';
 			});
 	});
+
+	function chooseTaskRepo(path: string) {
+		taskRepo = norm(path) === norm(root) ? '' : path;
+		form.base = '';
+		form.dependsOn = [];
+	}
 	let diffFor = $state<string | null>(null);
 	let diffFiles = $state<DiffFile[]>([]);
 	// Large diffs (hundreds of files) froze the page when every file rendered at
@@ -655,11 +692,12 @@
 			return;
 		}
 		await run('create', async () => {
+			const targetRoot = taskRoot;
 			const result = await registerCoordTask({
-				root,
+				root: targetRoot,
 				title: form.title.trim(),
 				description: form.description.trim() || undefined,
-				depends_on: form.dependsOn,
+				depends_on: otherRepo ? [] : form.dependsOn,
 				create_chat: true,
 				start_prompt: form.startPrompt.trim() || undefined,
 				model_id: form.model ?? undefined,
@@ -670,8 +708,14 @@
 				follow_edits: form.followEdits
 			});
 			if (result.worktree?.error) toast.error(result.worktree.error);
-			selectedId = result.task.id;
+			if (norm(targetRoot) === norm(root)) {
+				selectedId = result.task.id;
+			} else {
+				const name = targetRoot.split('/').pop() || targetRoot;
+				toast.success($t('coordination.taskCreatedIn', { repo: name }));
+			}
 			showNewTask = false;
+			taskRepo = '';
 			resetForm();
 		});
 	}
@@ -1645,6 +1689,23 @@
 				{$t('coordination.newTask')}
 			</h2>
 			<p class="text-xs text-gray-500">{$t('coordination.newTaskHint')}</p>
+			{#if repoOptions.length > 1}
+				<label class="block">
+					<span class="label">{$t('coordination.repository')}</span>
+					<select
+						class="field"
+						value={taskRoot}
+						onchange={(e) => chooseTaskRepo((e.currentTarget as HTMLSelectElement).value)}
+					>
+						{#each repoOptions as repo (repo.path)}
+							<option value={repo.path}>{repo.name} — {repo.path}</option>
+						{/each}
+					</select>
+					<span class="mt-1 block text-[0.6875rem] text-gray-400">
+						{$t('coordination.repositoryHint')}
+					</span>
+				</label>
+			{/if}
 			<label class="block">
 				<span class="label">{$t('coordination.taskTitle')}</span>
 				<input class="field" bind:value={form.title} required maxlength="200" />
@@ -1715,7 +1776,7 @@
 				<span class="label">{$t('coordination.testCommand')}</span>
 				<input class="field font-mono" bind:value={form.testCommand} placeholder="npm test" />
 			</label>
-			{#if coord.tasks.some((task) => !['completed', 'failed', 'ended'].includes(task.status))}
+			{#if !otherRepo && coord.tasks.some((task) => !['completed', 'failed', 'ended'].includes(task.status))}
 				<fieldset>
 					<legend class="label">{$t('coordination.dependsOnLabel')}</legend>
 					<div class="max-h-32 space-y-1 overflow-y-auto">
