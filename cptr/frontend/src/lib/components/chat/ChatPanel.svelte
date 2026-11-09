@@ -3,6 +3,7 @@
 		getChat,
 		getChats,
 		deleteChat as apiDeleteChat,
+		archiveChat as apiArchiveChat,
 		updateChatTitle,
 		forkChat as apiForkChat,
 		sendMessage as apiSendMessage,
@@ -571,12 +572,20 @@
 	let totalChats = $state(0);
 	let chatSortBy = $state<'title' | 'updated_at'>('updated_at');
 	let chatSortDir = $state<'asc' | 'desc'>('desc');
+	let showArchived = $state(false);
 	const totalPages = $derived(Math.max(1, Math.ceil(totalChats / CHATS_PAGE_SIZE)));
 
 	async function loadPreviousChats(page = 1) {
 		try {
 			const offset = (page - 1) * CHATS_PAGE_SIZE;
-			const data = await getChats(workspace, CHATS_PAGE_SIZE, offset, chatSortBy, chatSortDir);
+			const data = await getChats(
+				workspace,
+				CHATS_PAGE_SIZE,
+				offset,
+				chatSortBy,
+				chatSortDir,
+				showArchived
+			);
 			previousChats =
 				chatSortBy === 'updated_at'
 					? [...(data.chats || [])].sort(
@@ -619,6 +628,21 @@
 	async function deleteChat(id: string) {
 		await apiDeleteChat(id);
 		previousChats = previousChats.filter((c) => c.id !== id);
+	}
+
+	async function toggleArchiveChat(id: string) {
+		try {
+			await apiArchiveChat(id, !showArchived);
+			previousChats = previousChats.filter((c) => c.id !== id);
+			totalChats = Math.max(0, totalChats - 1);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : $t('chat.history.archive'));
+		}
+	}
+
+	function toggleArchivedView() {
+		showArchived = !showArchived;
+		loadPreviousChats(1);
 	}
 
 	async function renameChat(id: string) {
@@ -2083,6 +2107,9 @@
 					sortBy={chatSortBy}
 					sortDir={chatSortDir}
 					onsort={handleSort}
+					archived={showArchived}
+					onarchive={toggleArchiveChat}
+					ontogglearchived={toggleArchivedView}
 				/>
 			</div>
 		</div>

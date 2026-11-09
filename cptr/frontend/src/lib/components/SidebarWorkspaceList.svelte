@@ -16,6 +16,7 @@
 	import { deletedChats, markChatDeleted } from '$lib/stores/deletedChats';
 	import {
 		deleteChat as apiDeleteChat,
+		archiveChat as apiArchiveChat,
 		getChats,
 		updateChatTitle,
 		type ChatInfo
@@ -392,6 +393,15 @@
 		if (currentPath === wsPath && currentChatId === chatId) {
 			goto(`/?workspace=${encodeURIComponent(wsPath)}`);
 		}
+	}
+
+	/** Archive: the chat leaves the lists but stays stored, searchable and restorable. */
+	async function handleArchiveChat() {
+		if (!chatMenu) return;
+		const { chatId, wsPath } = chatMenu;
+		await apiArchiveChat(chatId, true);
+		const chats = wsChatsCache.get(wsPath) ?? [];
+		wsChatsCache = new Map([...wsChatsCache, [wsPath, chats.filter((item) => item.id !== chatId)]]);
 	}
 
 	async function handleRenameChat() {
@@ -803,6 +813,11 @@
 				label: $t('files.rename'),
 				icon: 'pencil',
 				onclick: handleRenameChat
+			},
+			{
+				label: $t('chat.history.archive'),
+				icon: 'archive',
+				onclick: handleArchiveChat
 			},
 			{
 				label: $t('chat.history.delete'),

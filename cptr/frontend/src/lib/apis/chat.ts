@@ -131,11 +131,20 @@ export const getChats = (
 	limit = 50,
 	offset = 0,
 	sortBy: 'title' | 'updated_at' = 'updated_at',
-	sortDir: 'asc' | 'desc' = 'desc'
+	sortDir: 'asc' | 'desc' = 'desc',
+	archived = false
 ) =>
 	fetchJSON<{ chats: ChatInfo[]; total: number; has_more: boolean }>(
-		`/api/chats?${workspace ? `workspace=${encodeURIComponent(workspace)}&` : ''}limit=${limit}&offset=${offset}&sort_by=${sortBy}&sort_dir=${sortDir}`
+		`/api/chats?${workspace ? `workspace=${encodeURIComponent(workspace)}&` : ''}limit=${limit}&offset=${offset}&sort_by=${sortBy}&sort_dir=${sortDir}${archived ? '&archived=true' : ''}`
 	);
+
+/** Archive a chat (it leaves chat lists but stays stored and searchable) or restore it. */
+export const archiveChat = (chatId: string, archived = true) =>
+	fetchJSON<{ ok: boolean; archived: boolean }>(`/api/chats/${chatId}/archive`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ archived })
+	});
 
 export const getChat = (chatId: string, modelId?: string) => {
 	const suffix = modelId ? `?model_id=${encodeURIComponent(modelId)}` : '';

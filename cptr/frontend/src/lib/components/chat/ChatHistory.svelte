@@ -18,6 +18,10 @@
 		sortBy?: 'title' | 'updated_at';
 		sortDir?: 'asc' | 'desc';
 		onsort?: (field: 'title' | 'updated_at') => void;
+		/** Showing archived chats instead of active ones. */
+		archived?: boolean;
+		onarchive?: (id: string) => void;
+		ontogglearchived?: () => void;
 	}
 	let {
 		chats,
@@ -31,7 +35,10 @@
 		onpagechange,
 		sortBy = 'updated_at',
 		sortDir = 'desc',
-		onsort
+		onsort,
+		archived = false,
+		onarchive,
+		ontogglearchived
 	}: Props = $props();
 
 	let menuChatId = $state<string | null>(null);
@@ -143,6 +150,20 @@
 	</div>
 {/if}
 
+{#if ontogglearchived}
+	<div class="mt-2 flex items-center gap-2 px-2 text-[0.6875rem] text-gray-400 dark:text-gray-500">
+		{#if archived && chats.length === 0}
+			<span>{$t('chat.history.noArchived')}</span>
+		{/if}
+		<button
+			class="hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+			onclick={() => ontogglearchived?.()}
+		>
+			{archived ? $t('chat.history.backToChats') : $t('chat.history.archivedChats')}
+		</button>
+	</div>
+{/if}
+
 {#if menuChatId && menuAnchor}
 	<DropdownMenu
 		anchor={menuAnchor}
@@ -166,6 +187,17 @@
 					if (menuChatId) onrename(menuChatId);
 				}
 			},
+			...(onarchive
+				? [
+						{
+							label: archived ? $t('chat.history.unarchive') : $t('chat.history.archive'),
+							icon: 'archive',
+							onclick: () => {
+								if (menuChatId) onarchive(menuChatId);
+							}
+						}
+					]
+				: []),
 			{
 				label: $t('chat.history.delete'),
 				icon: 'trash',
