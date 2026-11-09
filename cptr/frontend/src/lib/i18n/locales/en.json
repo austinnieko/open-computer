@@ -979,6 +979,7 @@
 	"chat.progress.status.approval": "Approval required",
 	"chat.progress.starting": "Starting…",
 	"chat.progress.now": "Now:",
+	"chat.replyInterrupted": "This reply stopped early ({{reason}}). Send \"continue\" to pick up where it left off.",
 	"chat.progress.approvalHint": "The agent is waiting for permission. Allow or deny the step in the chat below.",
 	"chat.progress.subagents_one": "{{count}} sub-agent working",
 	"chat.progress.subagents_other": "{{count}} sub-agents working",
