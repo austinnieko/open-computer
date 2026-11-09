@@ -596,7 +596,7 @@ class CreateToolServerRequest(BaseModel):
     args: list[str] = []  # for mcp_stdio
     env: Optional[dict[str, str]] = None  # for mcp_stdio
     cwd: Optional[str] = None  # for mcp_stdio
-    # OpenAPI only: expose just these operationIds (empty = all)
+    # Expose just these tools (OpenAPI operationIds / MCP tool names; empty = all)
     allowed_tools: Optional[list[str]] = None
     # "allow" runs this server's tools without asking in auto mode
     approval: Optional[str] = None

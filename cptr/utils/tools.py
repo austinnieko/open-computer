@@ -3078,7 +3078,12 @@ async def _load_tool_servers() -> dict:
                 headers = _build_server_headers(server)
                 await client.connect(server.get("url", ""), headers)
 
+                # Optional allowlist, as for OpenAPI servers (e.g. Linear's MCP
+                # has ~70 tools; most chats need a dozen).
+                allowed = set(server.get("allowed_tools") or [])
                 for spec in await client.list_tool_specs():
+                    if allowed and spec["name"] not in allowed:
+                        continue
                     prefixed = f"{server_id}_{spec['name']}"
                     tools[prefixed] = {
                         "server": server,
