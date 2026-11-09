@@ -600,6 +600,8 @@ class CreateToolServerRequest(BaseModel):
     allowed_tools: Optional[list[str]] = None
     # "allow" runs this server's tools without asking in auto mode
     approval: Optional[str] = None
+    # Only these tools run without asking in auto mode (the rest still ask)
+    approval_allow_tools: Optional[list[str]] = None
 
 
 @router.post("/tools/servers")
@@ -633,6 +635,7 @@ async def create_tool_server(request: Request, body: CreateToolServerRequest):
         "cwd": body.cwd,
         "allowed_tools": body.allowed_tools,
         "approval": body.approval if body.approval in ("allow", "review") else None,
+        "approval_allow_tools": body.approval_allow_tools,
     }
     servers.append(server)
     await _save_tool_servers(servers)
