@@ -979,7 +979,7 @@
 	"chat.progress.status.approval": "Approval required",
 	"chat.progress.starting": "Starting…",
 	"chat.progress.now": "Now:",
-	"chat.progress.approvalHint": "The agent is waiting for permission. Approve it below, or in OpenCode.",
+	"chat.progress.approvalHint": "The agent is waiting for permission. Allow or deny the step in the chat below.",
 	"chat.progress.subagents_one": "{{count}} sub-agent working",
 	"chat.progress.subagents_other": "{{count}} sub-agents working",
 	"chat.progress.failedSteps_one": "{{count}} step failed (details in the chat)",

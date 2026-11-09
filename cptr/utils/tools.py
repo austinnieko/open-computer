@@ -2915,6 +2915,21 @@ COORDINATION_TOOLS: dict[str, dict] = {
 ALL_TOOLS: dict[str, dict] = {**TOOLS, **BROWSER_TOOLS, **SUBAGENT_TOOLS, **COORDINATION_TOOLS}
 
 
+async def resolve_tool_server_approval(name: str) -> ToolApprovalPolicy:
+    """Approval policy for an external tool-server tool.
+
+    A server marked ``"approval": "allow"`` is trusted: its tools run without a
+    prompt in auto mode, like built-ins set to allow. Everything else needs
+    review, as before.
+    """
+    try:
+        entry = (await _load_tool_servers()).get("tools", {}).get(name)
+    except Exception:
+        entry = None
+    server = (entry or {}).get("server") or {}
+    return "allow" if server.get("approval") == "allow" else "review"
+
+
 async def resolve_builtin_tool_approval(name: str) -> ToolApprovalPolicy:
     """Resolve built-in tool approval. Unknown tools stay conservative."""
     tool = ALL_TOOLS.get(name)

@@ -598,6 +598,8 @@ class CreateToolServerRequest(BaseModel):
     cwd: Optional[str] = None  # for mcp_stdio
     # OpenAPI only: expose just these operationIds (empty = all)
     allowed_tools: Optional[list[str]] = None
+    # "allow" runs this server's tools without asking in auto mode
+    approval: Optional[str] = None
 
 
 @router.post("/tools/servers")
@@ -630,6 +632,7 @@ async def create_tool_server(request: Request, body: CreateToolServerRequest):
         "env": body.env,
         "cwd": body.cwd,
         "allowed_tools": body.allowed_tools,
+        "approval": body.approval if body.approval in ("allow", "review") else None,
     }
     servers.append(server)
     await _save_tool_servers(servers)
@@ -651,6 +654,7 @@ class UpdateToolServerRequest(BaseModel):
     args: Optional[list[str]] = None
     env: Optional[dict[str, str]] = None
     cwd: Optional[str] = None
+    approval: Optional[str] = None
 
 
 @router.put("/tools/servers/{server_id}")
@@ -662,6 +666,8 @@ async def update_tool_server(request: Request, server_id: str, body: UpdateToolS
     if not server:
         raise HTTPException(404, "tool server not found")
 
+    if body.approval in ("allow", "review"):
+        server["approval"] = body.approval
     for field in ("type", "url", "path", "auth_type", "name", "description", "command", "cwd"):
         val = getattr(body, field)
         if val is not None:
