@@ -596,6 +596,8 @@ class CreateToolServerRequest(BaseModel):
     args: list[str] = []  # for mcp_stdio
     env: Optional[dict[str, str]] = None  # for mcp_stdio
     cwd: Optional[str] = None  # for mcp_stdio
+    # OpenAPI only: expose just these operationIds (empty = all)
+    allowed_tools: Optional[list[str]] = None
 
 
 @router.post("/tools/servers")
@@ -627,6 +629,7 @@ async def create_tool_server(request: Request, body: CreateToolServerRequest):
         "args": body.args,
         "env": body.env,
         "cwd": body.cwd,
+        "allowed_tools": body.allowed_tools,
     }
     servers.append(server)
     await _save_tool_servers(servers)

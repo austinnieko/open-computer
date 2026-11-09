@@ -307,7 +307,9 @@ async def get_models(request: Request):
             models.append(
                 {
                     "id": prefixed_id,
-                    "name": model_id,
+                    # A prefixed connection is a named variant of a model (its
+                    # own prompt/tools), so show the connection's name.
+                    "name": (conn.get("name") or model_id) if prefix else model_id,
                     "provider": conn.get("provider", ""),
                     "connection_id": conn["id"],
                 }

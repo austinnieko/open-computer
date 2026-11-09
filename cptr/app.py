@@ -214,6 +214,31 @@ app.add_middleware(
 )
 
 
+
+# Compress chat reads: a long agent chat is 10+ MB of JSON. Limited to GET
+# /api/chats so proxied, streamed and upload responses are never buffered
+# (Starlette's GZip also skips text/event-stream).
+from starlette.middleware.gzip import GZipMiddleware
+
+
+class _ChatJsonGzip:
+    def __init__(self, app):
+        self.app = app
+        self.gzip = GZipMiddleware(app, minimum_size=4096)
+
+    async def __call__(self, scope, receive, send):
+        if (
+            scope["type"] == "http"
+            and scope.get("method") == "GET"
+            and scope.get("path", "").startswith("/api/chats")
+        ):
+            await self.gzip(scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
+
+
+app.add_middleware(_ChatJsonGzip)
+
 # Path normalization middleware (Windows: \ → / in JSON responses)
 import platform
 
@@ -525,7 +550,9 @@ if FRONTEND_BUILD_DIR.exists():
         file_path = FRONTEND_BUILD_DIR / full_path
         if full_path and file_path.is_file():
             return FileResponse(file_path)
-        return FileResponse(FRONTEND_BUILD_DIR / "index.html")
+        # The page names this build's hashed assets: revalidate it every time so a
+        # rebuilt frontend reaches the browser instead of a cached old shell.
+        return FileResponse(FRONTEND_BUILD_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 # Socket.IO: wraps the entire ASGI app

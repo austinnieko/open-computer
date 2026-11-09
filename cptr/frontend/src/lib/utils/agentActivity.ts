@@ -285,7 +285,10 @@ function classifyOne(cmd: string): ActivityKind {
 }
 
 export function classify(call: NormalCall): Classified {
-	const { tool, input } = call;
+	const { input } = call;
+	// Open Terminal tools arrive as a tool server (ot_read_file, ot_run_command...):
+	// label them like the built-in tools they mirror.
+	const tool = call.tool.replace(/^ot_/, "");
 	const command = typeof input.command === 'string' ? input.command : '';
 	const path = pathOf(input);
 
@@ -342,7 +345,7 @@ const LABELS: Record<ActivityKind, [active: string, done: string]> = {
 	git_branch: ['Managing branches', 'Managed branches'],
 	pr: ['Preparing pull request', 'Worked on pull request'],
 	issue: ['Updating GitHub issue', 'Updated GitHub issue'],
-	linear: ['Updating Linear', 'Updated Linear'],
+	linear: ['Using Linear', 'Used Linear'],
 	web: ['Reading the web', 'Read from the web'],
 	subagent: ['Sub-agent working', 'Sub-agent finished'],
 	plan: ['Updating plan', 'Updated plan'],
