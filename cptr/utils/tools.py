@@ -2919,15 +2919,21 @@ async def resolve_tool_server_approval(name: str) -> ToolApprovalPolicy:
     """Approval policy for an external tool-server tool.
 
     A server marked ``"approval": "allow"`` is trusted: its tools run without a
-    prompt in auto mode, like built-ins set to allow. Everything else needs
-    review, as before.
+    prompt in auto mode, like built-ins set to allow. ``"approval_allow_tools"``
+    trusts only the listed tools (e.g. a tracker's read-only lookups), so its
+    writes still ask. Everything else needs review, as before.
     """
     try:
         entry = (await _load_tool_servers()).get("tools", {}).get(name)
     except Exception:
         entry = None
-    server = (entry or {}).get("server") or {}
-    return "allow" if server.get("approval") == "allow" else "review"
+    entry = entry or {}
+    server = entry.get("server") or {}
+    if server.get("approval") == "allow":
+        return "allow"
+    if entry.get("original_name") in set(server.get("approval_allow_tools") or []):
+        return "allow"
+    return "review"
 
 
 async def resolve_builtin_tool_approval(name: str) -> ToolApprovalPolicy:
