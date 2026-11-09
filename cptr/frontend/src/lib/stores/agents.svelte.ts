@@ -33,6 +33,7 @@ export type AgentState =
 	| 'working'
 	| 'background'
 	| 'in_line'
+	| 'idle'
 	| 'stopped'
 	| 'review'
 	| 'draft'
@@ -57,10 +58,11 @@ export const STATE_ORDER: Record<AgentState, number> = {
 	background: 3,
 	in_line: 4,
 	stopped: 5,
-	review: 6,
-	draft: 7,
-	done: 8,
-	ended: 9
+	idle: 6,
+	review: 7,
+	draft: 8,
+	done: 9,
+	ended: 10
 };
 
 const state = $state({

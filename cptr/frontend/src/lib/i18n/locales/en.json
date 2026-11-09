@@ -1448,6 +1448,7 @@
 	"coordination.activity.needs_you": "Needs you",
 	"coordination.activity.blocked": "Blocked",
 	"coordination.activity.stopped": "Stopped",
+	"coordination.activity.idle": "Idle",
 	"coordination.detail.working": "The agent is working. Stop it any time; Resume continues where it left off.",
 	"coordination.detail.draft": "Not started yet. Click Start, or send a message in its chat.",
 	"coordination.detail.inLine": "Starts by itself when a slot is free ({{running}} of {{max}} in use).",

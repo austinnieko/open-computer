@@ -389,6 +389,15 @@ async def on_turn_end(chat_id: str, *, grace: float | None = None) -> str | None
     from cptr.utils.coordination import lifecycle, registry, scheduler
 
     checkout = await lifecycle.last_reply_checkout(root)
+    if checkout is None and lifecycle.worktree_recent_activity(task.worktree_path):
+        # No check-out line, but the worktree was touched moments ago: the agent
+        # was almost certainly still working (its background work is invisible
+        # here). Treat it as "continuing" rather than raising "Needs you"; the
+        # scheduled check-in will ask it to finish and check out properly. The
+        # tradeoff is deliberate: a genuine no-report is only delayed (one
+        # check-in interval, MAX_CHECKINS at most), while a false "Needs you"
+        # alarms the user every time. An explicit check-out always wins.
+        checkout = {"kind": "continuing", "note": ""}
     meta = lifecycle.checkout_meta(task.meta, checkout)
     meta.pop("waiting_for_user", None)
     moved = False
