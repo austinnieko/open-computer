@@ -60,6 +60,8 @@ from cptr.utils.tools import (
     execute_tool,
     get_tool_list,
     resolve_builtin_tool_approval,
+    resolve_tool_server_approval,
+    resolve_tool_server_approval,
     _fn_to_schema,
 )
 from cptr.utils.chat_export import export_chat_to_file
@@ -2330,7 +2332,11 @@ async def run_chat_task(
 
                 name = item.get("name", "")
                 tool = ALL_TOOLS.get(name)
-                tool_approval = await resolve_builtin_tool_approval(name) if tool else "review"
+                tool_approval = (
+                    await resolve_builtin_tool_approval(name)
+                    if tool
+                    else await resolve_tool_server_approval(name)
+                )
                 current_chat = await Chat.get_by_id(chat_id)
                 current_params = (
                     (current_chat.meta or {}).get("params", {}) if current_chat else chat_params
@@ -2345,7 +2351,7 @@ async def run_chat_task(
                         else "auto"
                     )
                 should_auto = approval_mode == "full" or (
-                    approval_mode == "auto" and tool and tool_approval == "allow"
+                    approval_mode == "auto" and tool_approval == "allow"
                 )
                 if (
                     not should_auto
@@ -2860,7 +2866,11 @@ async def run_chat_task(
                         if skill_name:
                             loaded_skill_names.add(skill_name)
                     tool = ALL_TOOLS.get(name)
-                    tool_approval = await resolve_builtin_tool_approval(name) if tool else "review"
+                    tool_approval = (
+                        await resolve_builtin_tool_approval(name)
+                        if tool
+                        else await resolve_tool_server_approval(name)
+                    )
                     current_chat = await Chat.get_by_id(chat_id)
                     current_params = (
                         (current_chat.meta or {}).get("params", {}) if current_chat else chat_params
@@ -2875,7 +2885,7 @@ async def run_chat_task(
                             else "auto"
                         )
                     should_auto = approval_mode == "full" or (
-                        approval_mode == "auto" and tool and tool_approval == "allow"
+                        approval_mode == "auto" and tool_approval == "allow"
                     )
                     if not should_auto:
                         needs_approval = tc
