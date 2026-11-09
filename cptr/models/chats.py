@@ -207,6 +207,22 @@ class Chat(Base):
             return result.rowcount > 0
 
     @staticmethod
+    async def set_archived(chat_id: str, archived: bool) -> bool:
+        """Archive or restore a chat. Archived chats stay stored and searchable;
+        chat lists leave them out unless asked for the archived ones."""
+        chat = await Chat.get_by_id(chat_id)
+        if not chat:
+            return False
+        meta = dict(chat.meta) if isinstance(chat.meta, dict) else {}
+        if bool(meta.get("archived")) == archived:
+            return True
+        if archived:
+            meta["archived"] = True
+        else:
+            meta.pop("archived", None)
+        return await Chat.update_meta(chat_id, meta, chat.updated_at or 0)
+
+    @staticmethod
     async def update_meta(chat_id: str, meta: dict, updated_at: int = 0) -> bool:
         async with await get_db() as db:
             result = await db.execute(

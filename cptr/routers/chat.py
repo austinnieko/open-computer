@@ -49,6 +49,7 @@ async def list_chats(
     offset: int = Query(0, ge=0, description="Number of chats to skip"),
     sort_by: str = Query("updated_at", description="Sort field: 'title' or 'updated_at'"),
     sort_dir: str = Query("desc", description="Sort direction: 'asc' or 'desc'"),
+    archived: bool = Query(False, description="List archived chats instead of active ones"),
 ):
     """List chats by scanning the workspace or global chat directory.
 
@@ -102,6 +103,8 @@ async def list_chats(
 
         chat_meta = chat.meta if isinstance(chat.meta, dict) else {}
         if is_internal_chat(chat_meta):
+            continue
+        if bool(chat_meta.get("archived")) != archived:
             continue
         if chat.meta is not None and not isinstance(chat.meta, dict):
             log.warning(
@@ -1076,6 +1079,21 @@ async def _get_latest_usage_checkpoint(
 
 class UpdateChatRequest(BaseModel):
     title: str
+
+
+class ArchiveChatRequest(BaseModel):
+    archived: bool = True
+
+
+@router.post("/{chat_id}/archive")
+async def archive_chat(request: Request, chat_id: str, body: ArchiveChatRequest):
+    """Archive a chat (hide it from chat lists, keep it) or restore it."""
+    user_id = _get_user(request)
+    chat = await Chat.get_by_id(chat_id)
+    if not chat or chat.user_id != user_id:
+        raise HTTPException(404, "chat not found")
+    await Chat.set_archived(chat_id, body.archived)
+    return {"ok": True, "archived": body.archived}
 
 
 class UpdateChatSettingsRequest(BaseModel):

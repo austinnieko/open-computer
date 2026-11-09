@@ -366,6 +366,22 @@ async def resolve_chat_cwd(
     return os.path.realpath(task.worktree_path)
 
 
+# A task that finished (or the user ended) has its chat archived: it leaves the
+# chat lists but stays stored, searchable and restorable. Failed tasks stay in
+# view so they get noticed.
+AUTO_ARCHIVE_STATUSES = {"completed", "ended"}
+
+
+async def _archive_finished_chat(task_dict: dict[str, Any]) -> None:
+    chat_id = task_dict.get("chat_id")
+    if not chat_id or task_dict.get("status") not in AUTO_ARCHIVE_STATUSES:
+        return
+    try:
+        await Chat.set_archived(chat_id, True)
+    except Exception:  # noqa: BLE001 - archiving is housekeeping, never a reason to fail
+        logging.getLogger(__name__).warning("Could not archive chat %s", chat_id, exc_info=True)
+
+
 async def set_status(
     task_id: str,
     status: str,
@@ -393,7 +409,9 @@ async def set_status(
     fields["meta"] = _milestone(meta, status)
     if not await CoordTask.update_fields(task_id, expect_status=current, **fields):
         raise CoordinationError(f"{task_id} changed concurrently; retry")
-    return (await CoordTask.get_by_id(task_id)).to_dict()
+    result = (await CoordTask.get_by_id(task_id)).to_dict()
+    await _archive_finished_chat(result)
+    return result
 
 
 # Where the user may mark a task done by hand: its work is finished (or landed
@@ -427,7 +445,9 @@ async def mark_done(task_id: str) -> dict[str, Any]:
         task_id, expect_status=task.status, status="completed", blockers=[], meta=meta
     ):
         raise CoordinationError(f"{task_id} changed concurrently; retry")
-    return (await CoordTask.get_by_id(task_id)).to_dict()
+    result = (await CoordTask.get_by_id(task_id)).to_dict()
+    await _archive_finished_chat(result)
+    return result
 
 
 async def record_session(task_id: str, *, agent: str | None, session_id: str | None) -> None:
