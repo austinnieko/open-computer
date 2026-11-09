@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import shutil
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -31,6 +33,22 @@ class CreateSessionRequest(BaseModel):
     rows: int = 24
     cols: int = 80
     cwd: Optional[str] = None
+    # "open-terminal" attaches to the Open Terminal container instead of a host shell.
+    target: Optional[str] = None
+
+
+OPEN_TERMINAL_HOME = "/home/user"
+
+
+def _open_terminal_command(cwd: Optional[str]) -> List[str]:
+    docker = shutil.which("docker")
+    if not docker:
+        raise HTTPException(status_code=503, detail="docker is not available for Open Terminal")
+    container = os.environ.get("CPTR_OPEN_TERMINAL_CONTAINER", "open-terminal")
+    inner = OPEN_TERMINAL_HOME
+    if cwd and (cwd == OPEN_TERMINAL_HOME or cwd.startswith(OPEN_TERMINAL_HOME + "/")) and os.path.isdir(cwd):
+        inner = cwd
+    return [docker, "exec", "-it", "-e", "TERM=xterm-256color", "-w", inner, container, "bash", "-l"]
 
 
 class SessionInfo(BaseModel):
@@ -60,7 +78,17 @@ async def create_session(request: Request, req: CreateSessionRequest):
     logger.info(f"Creating terminal session: cwd={req.cwd}, rows={req.rows}, cols={req.cols}")
     try:
         identity = await identity_for_request(request)
-        session = manager.create(identity=identity, rows=req.rows, cols=req.cols, cwd=req.cwd)
+        if req.target == "open-terminal":
+            session = manager.create(
+                identity=identity,
+                rows=req.rows,
+                cols=req.cols,
+                command=_open_terminal_command(req.cwd),
+            )
+        elif req.target:
+            raise HTTPException(status_code=400, detail=f"Unknown terminal target: {req.target}")
+        else:
+            session = manager.create(identity=identity, rows=req.rows, cols=req.cols, cwd=req.cwd)
     except TerminalUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except IdentityUnavailable as exc:

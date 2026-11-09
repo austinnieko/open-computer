@@ -127,6 +127,7 @@ def _create_unix(
     env: dict,
     rows: int,
     cols: int,
+    command: Optional[List[str]] = None,
 ) -> TerminalSession:
     """Create a terminal session on Unix using stdlib pty."""
     import fcntl
@@ -146,7 +147,10 @@ def _create_unix(
 
     # Create a temp init script that sources the user's real config then cd's.
     # This guarantees cwd is set AFTER all init files run. No timing hacks.
-    if shell_name in ("zsh",):
+    if command:
+        # Explicit command (e.g. docker exec into Open Terminal): no rc injection.
+        shell, shell_args = command[0], list(command)
+    elif shell_name in ("zsh",):
         # For zsh: use ZDOTDIR to inject our .zshrc
         zdotdir = tempfile.mkdtemp(prefix="cptr_zsh_")
         try:
@@ -273,6 +277,7 @@ class SessionManager:
         rows: int = 24,
         cols: int = 80,
         cwd: Optional[str] = None,
+        command: Optional[List[str]] = None,
     ) -> TerminalSession:
         session_id = uuid.uuid4().hex[:12]
         work_dir = (
@@ -308,7 +313,9 @@ class SessionManager:
         if IS_WINDOWS:
             session = _create_windows(session_id, identity, shell, work_dir, env, rows, cols)
         else:
-            session = _create_unix(session_id, identity, shell, work_dir, env, rows, cols)
+            session = _create_unix(
+                session_id, identity, shell, work_dir, env, rows, cols, command=command
+            )
 
         self._sessions[session_id] = session
         return session

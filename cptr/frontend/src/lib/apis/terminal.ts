@@ -25,8 +25,13 @@ export interface CommandSession {
 
 export const listSessions = () => fetchJSON<TerminalSession[]>('/api/terminal');
 
-export const createSession = (cwd?: string) =>
-	fetchJSON<TerminalSession>('/api/terminal', jsonBody(cwd ? { cwd } : {}));
+export type TerminalTarget = 'open-terminal';
+
+export const createSession = (cwd?: string, target?: TerminalTarget) =>
+	fetchJSON<TerminalSession>(
+		'/api/terminal',
+		jsonBody({ ...(cwd ? { cwd } : {}), ...(target ? { target } : {}) })
+	);
 
 export const deleteSession = (sessionId: string) =>
 	fetchHandler(`/api/terminal/${sessionId}`, { method: 'DELETE' }).catch(() => {});
