@@ -63,6 +63,7 @@ from cptr.utils.tools import (
     resolve_builtin_tool_approval,
     resolve_tool_server_approval,
     tool_server_display_item,
+    tool_server_prompt_section,
     resolve_tool_server_approval,
     _fn_to_schema,
 )
@@ -1849,6 +1850,7 @@ async def run_chat_task(
             recent_messages=messages,
             mentioned_files=memory_files,
         )
+        system += await tool_server_prompt_section()
         if loaded_summary:
             system += f"\n\n[CONVERSATION SUMMARY]\n{loaded_summary}"
         current_user_files = []
@@ -2223,6 +2225,7 @@ async def run_chat_task(
             recent_messages=messages,
             mentioned_files=memory_files,
         )
+        system += await tool_server_prompt_section()
         if loaded_summary:
             system += f"\n\n[CONVERSATION SUMMARY]\n{loaded_summary}"
         if regeneration_prompt:
