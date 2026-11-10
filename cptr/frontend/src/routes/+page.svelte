@@ -1530,7 +1530,7 @@
 		<div class="pane-content">
 			{#each group.tabs.filter((tab) => tab.type === 'files') as tab (tab.id)}
 				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId}>
-					<FileBrowser />
+					<FileBrowser rootPath={tab.path} rootName={tab.path ? tab.label : undefined} />
 				</div>
 			{/each}
 			{#each group.tabs.filter((tab) => tab.type === 'file' && tab.filePath) as tab (tab.id)}

@@ -9,6 +9,7 @@
 		reorderTabs,
 		openUntitledFileTab,
 		openTerminalTab,
+		openOpenTerminalFilesTab,
 		openBrowserTab,
 		openCoordinationTab,
 		isGitRepo,
@@ -264,6 +265,16 @@
 						}
 					},
 					{
+						label: 'Open Terminal',
+						icon: 'terminal',
+						onclick: () => openTerminalTab(group.id, 'open-terminal')
+					},
+					{
+						label: 'Open Terminal files',
+						icon: 'folder',
+						onclick: () => openOpenTerminalFilesTab(group.id)
+					},
+					{
 						label: $t('bar.newBrowser'),
 						icon: 'browser',
 						shortcut: formatChord($keybindings.newBrowser),
@@ -437,7 +448,9 @@
 						<Icon name={tabIconName(tab)} size={14} />
 					{/if}
 					<span class="max-w-30 overflow-hidden text-ellipsis">
-						{tab.type === 'files' ? ($activeWorkspace?.name ?? $t('bar.files')) : tab.label}
+						{tab.type === 'files' && !tab.path
+							? ($activeWorkspace?.name ?? $t('bar.files'))
+							: tab.label}
 					</span>
 					{#if tab.type === 'chat' && !isActive && isChatUnread(chatStatus)}
 						<span class="size-1.5 shrink-0 rounded-full bg-sky-500" aria-hidden="true"></span>

@@ -1173,18 +1173,22 @@ export function openUntitledFileTab(targetGroupId?: string): void {
 	}));
 }
 
-export async function openTerminalTab(targetGroupId?: string): Promise<void> {
+export async function openTerminalTab(
+	targetGroupId?: string,
+	target?: 'open-terminal'
+): Promise<void> {
 	const ws = get(currentWorkspace);
 	if (!ws) return;
 
 	try {
-		const data = await createSession(ws.path);
+		const data = await createSession(ws.path, target);
 
 		const newTab: Tab = {
 			id: nextId(),
 			type: 'terminal',
-			label: 'Terminal',
-			sessionId: data.session_id
+			label: target === 'open-terminal' ? 'Open Terminal' : 'Terminal',
+			sessionId: data.session_id,
+			...(target ? { target } : {})
 		};
 
 		updateGroupTabs(targetGroupId, (tabs) => ({
@@ -1196,7 +1200,28 @@ export async function openTerminalTab(targetGroupId?: string): Promise<void> {
 	}
 }
 
-/** Show the Open Terminal container shell in a pane beside the current one. */
+export const OPEN_TERMINAL_HOME = '/home/user';
+
+function openTerminalFilesTab(): Tab {
+	return { id: nextId(), type: 'files', label: 'Open Terminal files', path: OPEN_TERMINAL_HOME };
+}
+
+/** Browse Open Terminal's home (shared with this host) in a tab of the given group. */
+export function openOpenTerminalFilesTab(targetGroupId?: string): void {
+	const ws = get(currentWorkspace);
+	if (!ws) return;
+	for (const g of ws.groups) {
+		const existing = g.tabs.find((t) => t.type === 'files' && t.path === OPEN_TERMINAL_HOME);
+		if (existing) {
+			setActiveTab(existing.id, g.id);
+			return;
+		}
+	}
+	const tab = openTerminalFilesTab();
+	updateGroupTabs(targetGroupId, (tabs) => ({ tabs: [...tabs, tab], activeTabId: tab.id }));
+}
+
+/** Show the Open Terminal container shell (and its files) in a pane beside the current one. */
 export async function openOpenTerminalInSplit(direction?: SplitDirection): Promise<void> {
 	const ws = get(currentWorkspace);
 	if (!ws) return;
@@ -1221,7 +1246,11 @@ export async function openOpenTerminalInSplit(direction?: SplitDirection): Promi
 		sessionId,
 		target: 'open-terminal'
 	};
-	const group: EditorGroup = { id: nextId(), tabs: [tab], activeTabId: tab.id };
+	const hasFiles = ws.groups.some((g) =>
+		g.tabs.some((t) => t.type === 'files' && t.path === OPEN_TERMINAL_HOME)
+	);
+	const tabs = hasFiles ? [tab] : [tab, openTerminalFilesTab()];
+	const group: EditorGroup = { id: nextId(), tabs, activeTabId: tab.id };
 	const dir = direction ?? ws.splitDirection ?? 'horizontal';
 	currentWorkspace.update((current) =>
 		current
