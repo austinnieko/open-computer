@@ -51,6 +51,7 @@ from cptr.utils.ai import (
     stream_openai_responses,
 )
 from cptr.utils.config import _get_jwt_secret, now_ms
+from cptr.utils.leaked_tool_calls import extract_leaked_tool_call
 from cptr.utils.crypto import decrypt_key
 from cptr.utils.tools import (
     ALL_TOOLS,
@@ -1681,6 +1682,9 @@ async def run_chat_task(
     content = (msg.content or "") if msg else ""
     output_items: list[dict] = list(msg.output or []) if msg else []
     text_buffer = ""  # Accumulates text between tool calls
+    # Tool calls the server passed back as text (unknown names); each gets a
+    # tool error so the model can retry, a few times per reply at most.
+    leaked_call_retries = 0
     task_completed_success = False
     review_messages: list[dict] = []
     review_model_connection: dict | None = None
@@ -2703,6 +2707,32 @@ async def run_chat_task(
 
                 elif event["type"] == "done":
                     # Stream ended. Usage may have arrived earlier, multiple times, or never.
+                    if not pending_calls and leaked_call_retries < 3:
+                        leaked = extract_leaked_tool_call(text_buffer)
+                        if leaked:
+                            leaked_call_retries += 1
+                            cut, leaked_name, leaked_args = leaked
+                            tail = text_buffer[cut:]
+                            text_buffer = text_buffer[:cut]
+                            if content.endswith(tail):
+                                content = content[: len(content) - len(tail)]
+                            leaked_id = f"call_leaked_{uuid.uuid4().hex[:12]}"
+                            logger.warning(
+                                "[task %s] recovered tool call written as text: name=%s (retry %d)",
+                                message_id[:8],
+                                leaked_name,
+                                leaked_call_retries,
+                            )
+                            pending_call_ids.add(leaked_id)
+                            pending_calls.append(
+                                {
+                                    "type": "tool_call",
+                                    "call_id": leaked_id,
+                                    "id": "",
+                                    "name": leaked_name,
+                                    "arguments": leaked_args if isinstance(leaked_args, dict) else {},
+                                }
+                            )
                     if not pending_calls:
                         _flush_text()
                         if streamed_reasoning_chars and not response_reasoning_items:
