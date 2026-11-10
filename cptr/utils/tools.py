@@ -1205,6 +1205,52 @@ async def display_file(path: str, *, __context__: dict) -> str:
     )
 
 
+# Open Terminal's home is bind-mounted at the same path on this host, so files
+# it displays can be shown with the same inline card as built-in display_file.
+SHARED_TOOL_SERVER_ROOTS = ("/home/user",)
+
+
+def tool_server_display_item(name: str, result: str, workspace: str | None) -> dict | None:
+    """File card for a tool server's display_file result (e.g. ot_display_file).
+
+    Those servers only answer ``{"path": ..., "exists": true}``; the chat UI
+    needs the same shape the built-in tool returns.
+    """
+    if not name.endswith("_display_file"):
+        return None
+    try:
+        data = json.loads(result)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict) or data.get("exists") is False:
+        return None
+    raw = data.get("path")
+    if not isinstance(raw, str) or not raw.startswith("/"):
+        return None
+    full = Path(raw).resolve()
+    if not any(full == Path(r) or Path(r) in full.parents for r in SHARED_TOOL_SERVER_ROOTS):
+        return None
+    if not full.is_file() or _is_dotenv(full):
+        return None
+    mime_type = mimetypes.guess_type(str(full))[0] or "application/octet-stream"
+    display_path = str(full)
+    if workspace:
+        try:
+            display_path = str(full.relative_to(Path(workspace).resolve()))
+        except ValueError:
+            pass
+    return {
+        "type": "file",
+        "path": display_path,
+        "full_path": str(full),
+        "workspace": str(Path(workspace).resolve()) if workspace else "",
+        "name": full.name,
+        "size": full.stat().st_size,
+        "mime_type": mime_type,
+        "kind": _file_kind(full, mime_type),
+    }
+
+
 async def edit_file(
     path: str,
     target: str,

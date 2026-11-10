@@ -91,8 +91,20 @@
 	let renamingEntry = $state<string | null>(null);
 	let renameValue = $state('');
 
-	let cwd = $derived($activeWorkspace?.fileBrowserCwd ?? $activeWorkspace?.path ?? '/');
-	let workspacePath = $derived($activeWorkspace?.path ?? '/');
+	// rootPath: browse a fixed folder (e.g. Open Terminal's home) instead of the workspace.
+	let { rootPath = undefined, rootName = undefined }: { rootPath?: string; rootName?: string } =
+		$props();
+	let localCwd = $state<string | null>(null);
+	function setCwd(path: string) {
+		if (rootPath) localCwd = path;
+		else setFileBrowserCwd(path);
+	}
+	let cwd = $derived(
+		rootPath
+			? (localCwd ?? rootPath)
+			: ($activeWorkspace?.fileBrowserCwd ?? $activeWorkspace?.path ?? '/')
+	);
+	let workspacePath = $derived(rootPath ?? $activeWorkspace?.path ?? '/');
 	let searchText = $derived(searchQuery.trim());
 	let isSearching = $derived(Boolean(searchText));
 	let filenameMatches = $derived(matchResults?.filter((match) => match.name_match) ?? []);
@@ -111,7 +123,7 @@
 
 	let breadcrumbs = $derived(() => {
 		if (!cwd || !workspacePath) return [];
-		const wsName = $activeWorkspace?.name ?? 'workspace';
+		const wsName = rootName ?? $activeWorkspace?.name ?? 'workspace';
 		const relative = cwd.startsWith(workspacePath) ? cwd.slice(workspacePath.length) : '';
 		const parts = relative.split('/').filter(Boolean);
 		const segments = [{ name: wsName, path: workspacePath }];
@@ -566,7 +578,7 @@
 		lastClickedIndex = index;
 		if (entry.type === 'directory') {
 			// Navigate into the folder
-			setFileBrowserCwd(entry.path);
+			setCwd(entry.path);
 		} else {
 			openFileTab(entry.path);
 		}
@@ -574,7 +586,7 @@
 
 	function navigateTo(path: string) {
 		searchQuery = '';
-		setFileBrowserCwd(path);
+		setCwd(path);
 	}
 
 	function parentPath(relativePath: string): string {
@@ -1632,7 +1644,7 @@
 							label: $t('files.openFolder'),
 							icon: 'folder',
 							onclick: () => {
-								setFileBrowserCwd(contextMenu!.entry.path);
+								setCwd(contextMenu!.entry.path);
 								closeMenu();
 							}
 						},

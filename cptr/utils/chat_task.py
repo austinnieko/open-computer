@@ -62,6 +62,7 @@ from cptr.utils.tools import (
     get_tool_list,
     resolve_builtin_tool_approval,
     resolve_tool_server_approval,
+    tool_server_display_item,
     resolve_tool_server_approval,
     _fn_to_schema,
 )
@@ -2437,6 +2438,9 @@ async def run_chat_task(
                         file_item = json.loads(result)
                     except (json.JSONDecodeError, TypeError):
                         file_item = None
+                else:
+                    file_item = tool_server_display_item(name, result, workspace)
+                if file_item is not None:
                     if isinstance(file_item, dict) and file_item.get("type") == "file":
                         output_items.append(file_item)
                         await emit(output=file_item)
@@ -3031,6 +3035,9 @@ async def run_chat_task(
                             file_item = json.loads(result)
                         except (json.JSONDecodeError, TypeError):
                             file_item = None
+                    else:
+                        file_item = tool_server_display_item(tc["name"], result, workspace)
+                    if file_item is not None:
                         if isinstance(file_item, dict) and file_item.get("type") == "file":
                             output_items.append(file_item)
                             await emit(output=file_item)
