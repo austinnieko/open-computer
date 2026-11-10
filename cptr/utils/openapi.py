@@ -203,6 +203,22 @@ def convert_openapi_to_tool_specs(openapi_spec: dict) -> list[dict]:
 # ── Tool execution ──────────────────────────────────────────
 
 
+def _timeout_for(args: dict, timeout: float) -> float:
+    """A request timeout that outlasts the ``wait`` seconds a long-poll tool was asked to hold.
+
+    Open Terminal's ``run_command`` / ``get_process_status`` hold the request open for ``wait``
+    seconds (up to 300); a fixed 60 s client timeout turned every longer wait into a failed call.
+    """
+    wait = args.get("wait") if isinstance(args, dict) else None
+    try:
+        wait = float(wait)
+    except (TypeError, ValueError):
+        return timeout
+    if wait <= 0:
+        return timeout
+    return max(timeout, min(wait, 3600) + 30)
+
+
 async def execute_openapi_tool(
     server_url: str,
     openapi_spec: dict,
@@ -227,6 +243,7 @@ async def execute_openapi_tool(
     Returns:
         The response body as a string (JSON-serialized if structured).
     """
+    timeout = _timeout_for(args, timeout)
     paths = openapi_spec.get("paths", {})
 
     # Find matching route
