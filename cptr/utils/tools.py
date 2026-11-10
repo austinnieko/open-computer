@@ -2924,10 +2924,15 @@ async def resolve_tool_server_approval(name: str) -> ToolApprovalPolicy:
     writes still ask. Everything else needs review, as before.
     """
     try:
-        entry = (await _load_tool_servers()).get("tools", {}).get(name)
+        tools = (await _load_tool_servers()).get("tools", {})
     except Exception:
-        entry = None
-    entry = entry or {}
+        return "review"
+    entry = tools.get(name)
+    if entry is None:
+        # Not a built-in and not on any loaded server: execute_tool only returns
+        # an "unknown tool" error, so there is nothing to approve. (Models that
+        # invent a tool name shouldn't stall a chat on an approval prompt.)
+        return "allow"
     server = entry.get("server") or {}
     if server.get("approval") == "allow":
         return "allow"
@@ -3431,4 +3436,22 @@ async def execute_tool(name: str, args: dict, __context__: dict) -> str:
     if name in cache["tools"]:
         return await _execute_external_tool(name, args)
 
-    return f"Error: unknown tool: {name}"
+    return await unknown_tool_error(name, __context__)
+
+
+async def unknown_tool_error(name: str, context: dict | None = None) -> str:
+    """Tool error for a name that is not offered, with the closest real names."""
+    import difflib
+
+    builtin = (context or {}).get("builtin_tools")
+    names = [n for n in ALL_TOOLS if is_builtin_tool_enabled(n, builtin)]
+    try:
+        names += list((await _load_tool_servers()).get("tools", {}))
+    except Exception:
+        pass
+    close = difflib.get_close_matches(name, names, n=3, cutoff=0.5)
+    hint = f" Closest available: {', '.join(close)}." if close else ""
+    return (
+        f"Error: unknown tool: {name}. It is not in your tool list, so nothing ran."
+        f"{hint} Retry with an exact tool name from your tool list."
+    )
