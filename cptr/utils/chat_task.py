@@ -32,6 +32,7 @@ from cptr.utils.skills import (
     get_skill_settings,
     load_skill,
 )
+from cptr.utils.repeat_guard import RepeatGuard
 from cptr.utils.summarize import summarize_messages
 from cptr.models import (
     Chat,
@@ -2496,6 +2497,7 @@ async def run_chat_task(
         compact_token_threshold = compact_token_threshold or resolve_compact_token_threshold()
         request_params = {**global_rp, **model_rp, **chat_request_params} or None
 
+        repeat_guard = RepeatGuard()
         for _iteration in range(CHAT_MAX_ITERATIONS):
             # ── Context compaction: summarize older messages if too large ──
             if should_compact(
@@ -2999,7 +3001,16 @@ async def run_chat_task(
                 sequential_result_items: list[dict] = []
                 for idx in other_indices:
                     tc, item = call_items[idx]
-                    if tc["name"] == "create_artifact":
+                    refusal = repeat_guard.blocked(tc["name"], tc["arguments"])
+                    if refusal:
+                        logger.warning(
+                            "[task %s] refused repeated tool call name=%s (same result %d+ times)",
+                            message_id[:8],
+                            tc["name"],
+                            repeat_guard.limit,
+                        )
+                        result = refusal
+                    elif tc["name"] == "create_artifact":
                         args = dict(tc["arguments"])
                         args.pop("workspace", None)
                         result = await create_artifact(**args, workspace=workspace)
@@ -3009,6 +3020,9 @@ async def run_chat_task(
                             tc["arguments"],
                             {**tool_ctx, "call_id": tc["call_id"]},
                         )
+                    raw_result = result
+                    if not refusal:
+                        result = repeat_guard.record(tc["name"], tc["arguments"], result)
 
                     # Append output BEFORE marking completed — if anything
                     # between here and persist fails, the call stays
@@ -3018,7 +3032,7 @@ async def run_chat_task(
                         "type": "function_call_output",
                         "call_id": tc["call_id"],
                         "output": result,
-                        "status": "failed" if _is_tool_result_error(result) else "completed",
+                        "status": "failed" if _is_tool_result_error(raw_result) else "completed",
                     }
                     output_items.append(result_item)
                     item["status"] = result_item["status"]
@@ -3027,7 +3041,7 @@ async def run_chat_task(
                     _sync_state()
                     sequential_result_items.append(result_item)
 
-                    artifact_item = build_artifact_item(tc["name"], tc["arguments"], result)
+                    artifact_item = build_artifact_item(tc["name"], tc["arguments"], raw_result)
                     if artifact_item:
                         output_items.append(artifact_item)
                         await emit(output=artifact_item)
@@ -3035,11 +3049,11 @@ async def run_chat_task(
 
                     if tc["name"] == "display_file":
                         try:
-                            file_item = json.loads(result)
+                            file_item = json.loads(raw_result)
                         except (json.JSONDecodeError, TypeError):
                             file_item = None
                     else:
-                        file_item = tool_server_display_item(tc["name"], result, workspace)
+                        file_item = tool_server_display_item(tc["name"], raw_result, workspace)
                     if file_item is not None:
                         if isinstance(file_item, dict) and file_item.get("type") == "file":
                             output_items.append(file_item)
