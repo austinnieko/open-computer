@@ -3184,6 +3184,59 @@ async def _load_tool_servers() -> dict:
     return _tool_server_cache
 
 
+def tool_server_prompt_text(servers: list[dict], tools: dict) -> str:
+    """System-prompt section naming each tool server's prefix and description.
+
+    Without it the model sees only prefixed tool names, so two servers for the
+    same service (e.g. two Linear workspaces) look interchangeable and it gives
+    up after searching the first one.
+    """
+    prefixes: dict[str, set[str]] = {}
+    for entry in tools.values():
+        sid = (entry.get("server") or {}).get("id", "")
+        prefixes.setdefault(sid, set()).add(entry.get("original_name", ""))
+    active = [s for s in servers if s.get("id") in prefixes]
+    if not active:
+        return ""
+    lines = []
+    for s in active:
+        sid = s["id"]
+        label = (s.get("name") or "").strip()
+        desc = (s.get("description") or "").strip()
+        detail = " - ".join(p for p in (label, desc) if p)
+        lines.append(f"- `{sid}_*`" + (f": {detail}" if detail else ""))
+
+    # Servers that offer the same tools are the same service on different
+    # accounts or workspaces.
+    groups: dict[frozenset, list[str]] = {}
+    for s in active:
+        groups.setdefault(frozenset(prefixes[s["id"]]), []).append(s["id"])
+    notes = []
+    for ids in groups.values():
+        if len(ids) > 1:
+            names = ", ".join(f"`{i}_*`" for i in ids)
+            notes.append(
+                f"{names} are the same service connected to different accounts or "
+                "workspaces. Choose by the descriptions above (e.g. which workspace or "
+                "team an issue key belongs to). If something is not found in one, look "
+                "in the others before saying it is unavailable."
+            )
+    text = "[TOOL SERVERS]\nExternal tools are grouped by server prefix:\n" + "\n".join(lines)
+    if notes:
+        text += "\n\n" + "\n".join(notes)
+    return text
+
+
+async def tool_server_prompt_section() -> str:
+    """``tool_server_prompt_text`` for the loaded servers, prefixed for appending."""
+    try:
+        loaded = await _load_tool_servers()
+    except Exception:
+        return ""
+    text = tool_server_prompt_text(loaded.get("servers") or [], loaded.get("tools") or {})
+    return f"\n\n{text}" if text else ""
+
+
 def invalidate_tool_server_cache() -> None:
     """Clear the external tool server cache, forcing a reload on next access.
 
