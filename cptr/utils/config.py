@@ -5,7 +5,12 @@ SQLite handles user data (users, auths, user_states)."""
 
 from __future__ import annotations
 
+import json
+import logging
+import os
+import re
 import secrets
+import tempfile
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -16,6 +21,8 @@ import jwt  # PyJWT
 from cptr.env import DATA_DIR, CONFIG_FILE
 
 SESSION_MAX_AGE = 30 * 24 * 3600  # 30 days (seconds, for JWT exp)
+
+log = logging.getLogger(__name__)
 
 
 def now_ms() -> int:
@@ -64,7 +71,15 @@ def load_config() -> dict:
                 # Minimal fallback for our simple config format
                 _config_cache = _parse_simple_toml(CONFIG_FILE.read_text())
         except Exception:
-            _config_cache = {}
+            log.error(
+                "config.toml could not be parsed; salvaging it line by line (fix or remove %s)",
+                CONFIG_FILE,
+                exc_info=True,
+            )
+            try:
+                _config_cache = _parse_simple_toml(CONFIG_FILE.read_text())
+            except Exception:
+                _config_cache = {}
     else:
         _config_cache = {}
     return _config_cache
@@ -92,9 +107,10 @@ def _parse_simple_toml(text: str) -> dict:
             value = value.strip()
             # Strip quotes
             if value.startswith('"') and value.endswith('"'):
-                value = value[1:-1]
-                # Unescape
-                value = value.replace('\\"', '"').replace("\\\\", "\\")
+                try:
+                    value = json.loads(value)  # save_config writes JSON-style escapes
+                except ValueError:
+                    value = value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
             elif value.startswith("'") and value.endswith("'"):
                 value = value[1:-1]
             elif value == "true":
@@ -103,14 +119,29 @@ def _parse_simple_toml(text: str) -> dict:
                 value = False
             elif value.startswith("[") and value.endswith("]"):
                 # Simple list: ["a", "b"]
-                import json
-
                 try:
                     value = json.loads(value)
                 except Exception:
                     pass
             result[current_section][key] = value
     return result
+
+
+_BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
+_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def _toml_str(value: str) -> str:
+    """A TOML basic string. JSON's escapes (\\n, \\", \\\\, \\uXXXX) are all valid TOML escapes, and
+    ensure_ascii leaves no raw control or non-ASCII character (a lone surrogate included); DEL is the one
+    control character JSON leaves raw that TOML forbids. TOML has no escape for a lone surrogate, so it
+    becomes U+FFFD."""
+    value = _SURROGATE.sub("\ufffd", value)
+    return json.dumps(value, ensure_ascii=True).replace("\x7f", "\\u007f")
+
+
+def _toml_key(key: str) -> str:
+    return key if _BARE_KEY.match(key) else _toml_str(key)
 
 
 def save_config(config: dict):
@@ -121,23 +152,35 @@ def save_config(config: dict):
         if isinstance(values, dict):
             lines.append(f"[{section}]")
             for k, v in values.items():
-                # Quote keys that contain dots (e.g. "auth.signup_enabled")
-                key_str = f'"{k}"' if "." in k else k
+                # Quote keys that are not bare keys (e.g. "auth.signup_enabled")
+                key_str = _toml_key(k)
                 if isinstance(v, str):
-                    # Escape backslashes and quotes in string values
-                    escaped = v.replace("\\", "\\\\").replace('"', '\\"')
-                    lines.append(f'{key_str} = "{escaped}"')
+                    lines.append(f"{key_str} = {_toml_str(v)}")
                 elif isinstance(v, bool):
                     lines.append(f"{key_str} = {'true' if v else 'false'}")
                 elif isinstance(v, (int, float)):
                     lines.append(f"{key_str} = {v}")
                 elif isinstance(v, list):
-                    items = ", ".join(f'"{i}"' if isinstance(i, str) else str(i) for i in v)
+                    items = ", ".join(_toml_str(i) if isinstance(i, str) else str(i) for i in v)
                     lines.append(f"{key_str} = [{items}]")
                 else:
                     lines.append(f"{key_str} = {v}")
             lines.append("")
-    CONFIG_FILE.write_text("\n".join(lines))
+    # A uniquely named temp file in the same folder, synced, then renamed over the old file: a failed or
+    # concurrent write can no longer leave config.toml empty or half written.
+    fd, tmp = tempfile.mkstemp(dir=CONFIG_FILE.parent, prefix=".config.toml.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, CONFIG_FILE)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     _config_cache = config
 
 
