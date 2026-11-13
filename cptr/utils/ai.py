@@ -117,6 +117,19 @@ def _stream_retry_delay(exc: BaseException, attempt: int) -> float:
 # ── Non-streaming completion ────────────────────────────────
 
 
+class CompletionText(str):
+    """A completion's text that also says why generation stopped: ``finish_reason`` is "length" when the
+    token budget cut it off, "stop" when it ended normally, or None when the provider did not say."""
+
+    finish_reason: str | None = None
+
+    @classmethod
+    def of(cls, text: str | None, finish_reason: str | None) -> "CompletionText":
+        out = cls(text or "")
+        out.finish_reason = finish_reason
+        return out
+
+
 async def chat_completion(
     provider: str,
     base_url: str,
@@ -219,16 +232,23 @@ async def chat_completion(
         data = resp.json()
 
     if provider == "anthropic":
-        return data.get("content", [{}])[0].get("text", "")
+        stop = data.get("stop_reason")
+        return CompletionText.of(
+            data.get("content", [{}])[0].get("text", ""),
+            "length" if stop == "max_tokens" else ("stop" if stop else None),
+        )
     if api_type == "responses":
         # Responses API: output is a list of items
+        incomplete = (data.get("incomplete_details") or {}).get("reason")
+        finish = "length" if incomplete == "max_output_tokens" else ("stop" if data.get("status") == "completed" else None)
         for item in data.get("output", []):
             if item.get("type") == "message":
                 for c in item.get("content", []):
                     if c.get("type") == "output_text":
-                        return c.get("text", "")
-        return ""
-    return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        return CompletionText.of(c.get("text", ""), finish)
+        return CompletionText.of("", finish)
+    choice = (data.get("choices") or [{}])[0]
+    return CompletionText.of(choice.get("message", {}).get("content", ""), choice.get("finish_reason"))
 
 
 async def generate_text(

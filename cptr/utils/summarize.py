@@ -10,6 +10,17 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# The summary is the agent's only record of everything compacted away, so it must not be cut short.
+SUMMARY_MAX_TOKENS = 4000
+SUMMARY_RETRY_MAX_TOKENS = 8000
+# What the summarizer reads: each message, and the whole transcript (characters).
+MESSAGE_CHAR_LIMIT = 6000
+TRANSCRIPT_CHAR_LIMIT = 120_000
+CUT_OFF_NOTE = (
+    "\n\n[This summary was cut off at its length limit; details from the end of the compacted history may be "
+    "missing. Re-check files and state before relying on them.]"
+)
+
 DEFAULT_SUMMARIZE_PROMPT = (
     "Summarize this conversation history concisely. Include:\n"
     "- Key decisions made\n"
@@ -53,30 +64,50 @@ async def summarize_messages(
         if isinstance(content, list):
             content = " ".join(b.get("text", "") for b in content if b.get("type") == "text")
         # Truncate very long messages (e.g. tool outputs)
-        if len(content) > 2000:
-            content = content[:1000] + "\n...(truncated)...\n" + content[-500:]
+        if len(content) > MESSAGE_CHAR_LIMIT:
+            head = MESSAGE_CHAR_LIMIT * 2 // 3
+            content = content[:head] + "\n...(truncated)...\n" + content[-(MESSAGE_CHAR_LIMIT - head) :]
         parts.append(f"{role}: {content}")
 
     text = "\n".join(parts)
     # Cap input to summarization call
-    if len(text) > 30_000:
-        text = text[:15_000] + "\n...\n" + text[-10_000:]
+    if len(text) > TRANSCRIPT_CHAR_LIMIT:
+        half = TRANSCRIPT_CHAR_LIMIT // 2
+        text = text[:half] + "\n...\n" + text[-(TRANSCRIPT_CHAR_LIMIT - half) :]
 
     try:
         from cptr.utils.ai import generate_text
         from cptr.utils.utility_models import configured_utility_model
 
-        result = await generate_text(
-            None,
-            model_id=await configured_utility_model("summary_generation"),
-            active_connection=connection,
-            active_model=model,
-            messages=[{"role": "user", "content": text}],
-            system=_get_summarize_prompt(),
-            max_tokens=1000,
-        )
-        if result is None:
-            raise RuntimeError("summary generation failed")
+        model_id = await configured_utility_model("summary_generation")
+
+        async def attempt(budget: int, extra: str = ""):
+            return await generate_text(
+                None,
+                model_id=model_id,
+                active_connection=connection,
+                active_model=model,
+                messages=[{"role": "user", "content": text}],
+                system=_get_summarize_prompt() + extra,
+                max_tokens=budget,
+            )
+
+        result = await attempt(SUMMARY_MAX_TOKENS)
+        if result is not None and getattr(result, "finish_reason", None) == "length":
+            logger.warning("[summarize] summary hit %d tokens; retrying with %d", SUMMARY_MAX_TOKENS, SUMMARY_RETRY_MAX_TOKENS)
+            retry = await attempt(
+                SUMMARY_RETRY_MAX_TOKENS,
+                "\n\nYour previous summary ran past its length limit. Be more concise: keep every decision, file "
+                "path, open task and user instruction, and drop narration.",
+            )
+            if retry is not None and str(retry).strip():
+                result = retry
+            if getattr(result, "finish_reason", None) == "length" and str(result).strip():
+                logger.warning("[summarize] summary still cut off at its limit; keeping it with a note")
+                result = str(result).rstrip() + CUT_OFF_NOTE
+        if result is None or not str(result).strip():
+            raise RuntimeError("summary generation returned no text")
+        result = str(result)
         logger.info("[summarize] LLM summary: %d chars", len(result))
         return result
     except Exception:
