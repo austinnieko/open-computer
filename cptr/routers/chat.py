@@ -1093,6 +1093,23 @@ async def archive_chat(request: Request, chat_id: str, body: ArchiveChatRequest)
     if not chat or chat.user_id != user_id:
         raise HTTPException(404, "chat not found")
     await Chat.set_archived(chat_id, body.archived)
+    # Archived chats leave the unread count; tell the sidebar the workspace's new count now.
+    workspace = (chat.meta or {}).get("workspace", "")
+    if workspace:
+        from cptr.utils.chat_task import get_active_chat_ids
+        from cptr.socket.main import emit_to_user
+
+        unread_counts = await Chat.unread_counts_by_workspace(
+            user_id, [workspace], get_active_chat_ids()
+        )
+        await emit_to_user(
+            user_id,
+            {
+                "chat_id": chat_id,
+                "workspace": workspace,
+                "workspace_unread_count": unread_counts.get(workspace, 0),
+            },
+        )
     return {"ok": True, "archived": body.archived}
 
 
