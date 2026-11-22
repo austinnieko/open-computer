@@ -271,6 +271,8 @@ class Chat(Base):
                 workspace.in_(paths),
                 Chat.meta["internal"].as_boolean().is_not(True),
                 Chat.meta["subagent"].as_boolean().is_not(True),
+                # Archived chats are put away: a reply landing after archiving must not light the badge.
+                Chat.meta["archived"].as_boolean().is_not(True),
                 Chat.updated_at > func.coalesce(Chat.last_read_at, 0),
             )
             .group_by(workspace)

@@ -160,6 +160,25 @@
 	}
 	const openChatIds = $derived(new Set(openChats.map((o) => o.chat.id)));
 
+	// Archived chats are put away: an open tab of one (left open before it was archived)
+	// must not keep it pinned in the list. The chat you are looking at stays visible.
+	let archivedChatIds = $state(new Set<string>());
+	const archivedChecked = new Set<string>();
+	$effect(() => {
+		const path = currentPath;
+		const open = openChats;
+		if (!path || archivedChecked.has(path)) return;
+		const listed = new Set((wsChatsCache.get(path) ?? []).map((c) => c.id));
+		if (!open.some((o) => !isDraftId(o.chat.id) && !listed.has(o.chat.id))) return;
+		archivedChecked.add(path);
+		void getChats(path, 200, 0, 'updated_at', 'desc', true)
+			.then((res) => {
+				if (!res.chats.length) return;
+				archivedChatIds = new Set([...archivedChatIds, ...res.chats.map((c) => c.id)]);
+			})
+			.catch(() => archivedChecked.delete(path));
+	});
+
 	function closeOpenChat(o: OpenChat) {
 		void closeTab(o.tabId, o.groupId);
 	}
@@ -402,6 +421,12 @@
 		await apiArchiveChat(chatId, true);
 		const chats = wsChatsCache.get(wsPath) ?? [];
 		wsChatsCache = new Map([...wsChatsCache, [wsPath, chats.filter((item) => item.id !== chatId)]]);
+		archivedChatIds = new Set([...archivedChatIds, chatId]);
+		const viewing = currentPath === wsPath && currentChatId === chatId;
+		for (const o of openChats) {
+			if (o.chat.id === chatId) void closeTab(o.tabId, o.groupId);
+		}
+		if (viewing) goto(`/?workspace=${encodeURIComponent(wsPath)}`);
 	}
 
 	async function handleRenameChat() {
@@ -689,7 +714,8 @@
 							{@const unlisted = openChats.filter(
 								(o) =>
 									!listedIds.has(o.chat.id) &&
-									(o.chat.id === currentChatId || !belongsElsewhere(o.chat.id))
+									(o.chat.id === currentChatId ||
+										(!belongsElsewhere(o.chat.id) && !archivedChatIds.has(o.chat.id)))
 							)}
 							{#each unlisted as o (o.chat.id)}
 								{@render chatRow(o.chat, ws.path, o)}
