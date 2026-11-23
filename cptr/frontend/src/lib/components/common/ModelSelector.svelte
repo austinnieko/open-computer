@@ -132,7 +132,9 @@
 </script>
 
 <span class="relative inline-flex {open ? 'z-[1001]' : ''}">
+	<!-- type="button": inside a form (new task, automations) a bare button submits it on click -->
 	<button
+		type="button"
 		bind:this={btnEl}
 		class="flex items-center gap-1 px-2 py-1 rounded-lg text-[0.6875rem] text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors duration-100"
 		onclick={toggle}
