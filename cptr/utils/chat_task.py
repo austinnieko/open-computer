@@ -15,7 +15,12 @@ from pathlib import Path
 from typing import Any
 
 from cptr.events import EVENTS, publish_event
-from cptr.env import CHAT_MAX_ITERATIONS, CHAT_TOOL_COMMAND_MAX_CHARS, CHAT_TOOL_MAX_CHARS
+from cptr.env import (
+    CHAT_AUTO_CONTINUE_LIMIT,
+    CHAT_MAX_ITERATIONS,
+    CHAT_TOOL_COMMAND_MAX_CHARS,
+    CHAT_TOOL_MAX_CHARS,
+)
 from cptr.utils.context import (
     build_context_usage,
     estimate_messages_tokens,
@@ -592,7 +597,40 @@ def _merge_pending_input_meta(messages: list[ChatMessage]) -> dict | None:
         if isinstance(message_files, list):
             files.extend(message_files)
 
-    return {"files": files} if files else None
+    meta: dict = {"files": files} if files else {}
+    auto = [m.meta.get("auto_continue") for m in messages if m.meta and m.meta.get("auto_continue")]
+    if auto:
+        meta["auto_continue"] = max(auto)
+    return meta or None
+
+
+AUTO_CONTINUE_TEXT = (
+    "Continue where you left off. (Automatic continue {n} of {limit}: "
+    "the previous reply reached the step limit.)"
+)
+
+
+def auto_continue_number(
+    assistant_msg: ChatMessage | None,
+    messages: list[ChatMessage],
+    *,
+    limit: int,
+    subagent: bool,
+) -> int | None:
+    """Return the next automatic-continue number for a reply that hit the step
+    limit, or None when it should stop and wait for the user: auto-continue is
+    off, this is a subagent chat, the limit is used up, or the user already
+    queued a message on this reply."""
+    if limit <= 0 or subagent or assistant_msg is None:
+        return None
+    if any(
+        m.role == "user" and m.parent_id == assistant_msg.id and (m.meta or {}).get("queued")
+        for m in messages
+    ):
+        return None
+    parent = next((m for m in messages if m.id == assistant_msg.parent_id), None)
+    done = int(((parent.meta or {}).get("auto_continue") or 0) if parent else 0)
+    return done + 1 if done < limit else None
 
 
 def _pending_input_ready(message: ChatMessage, msg_map: dict[str, ChatMessage]) -> bool:
@@ -3149,7 +3187,43 @@ async def run_chat_task(
                 task_completed_success = True
                 return
 
-        # Max iterations reached
+        # Max iterations reached: queue an automatic "continue" (picked up by
+        # process_pending_chat_inputs in the finally block) a few times before
+        # really stopping, so long jobs do not sit idle until someone notices.
+        auto_n = None
+        try:
+            auto_n = auto_continue_number(
+                msg,
+                await ChatMessage.get_all_by_chat(chat_id),
+                limit=CHAT_AUTO_CONTINUE_LIMIT,
+                subagent=bool(review_chat_params.get("subagent")),
+            )
+        except Exception:
+            logger.exception("[task %s] auto-continue check failed", message_id[:8])
+        if auto_n is not None:
+            await _save_message(
+                "max iterations (auto-continue)",
+                content=content,
+                output=output_items,
+                done=True,
+                meta={"max_iterations": True, "auto_continued": auto_n},
+            )
+            await ChatMessage.create(
+                chat_id=chat_id,
+                role="user",
+                content=AUTO_CONTINUE_TEXT.format(n=auto_n, limit=CHAT_AUTO_CONTINUE_LIMIT),
+                parent_id=message_id,
+                model=(msg.model if msg else None) or model,
+                meta={"queued": True, "auto_continue": auto_n},
+                created_at=now_ms(),
+            )
+            logger.info(
+                "[task %s] max iterations reached; auto-continue %d/%d queued",
+                message_id[:8], auto_n, CHAT_AUTO_CONTINUE_LIMIT,
+            )
+            _task_state.pop(message_id, None)
+            await _emit_done()
+            return
         await _save_message(
             "max iterations",
             content=content,
