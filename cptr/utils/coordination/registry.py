@@ -458,6 +458,24 @@ async def record_session(task_id: str, *, agent: str | None, session_id: str | N
     await CoordTask.update_fields(task_id, agent=agent or task.agent, agent_session_id=session_id)
 
 
+async def _adopt_branch(task: CoordTask, branch: str) -> bool:
+    """Move the task's branch claim to ``branch``. False if another task holds it,
+    or if it is the base branch (a task must never take over main)."""
+    base = {task.base_ref, (task.meta or {}).get("base_branch"), "main", "master"}
+    if branch in base:
+        return False
+    await CoordClaim.release(task.id, kinds={"branch"})
+    try:
+        await CoordClaim.claim(task.repo_key, task.id, "branch", f"branch:{branch}")
+        return True
+    except ClaimConflict:
+        try:
+            await CoordClaim.claim(task.repo_key, task.id, "branch", f"branch:{task.branch}")
+        except ClaimConflict:
+            logger.warning("[coord] %s lost its branch claim on %s", task.id, task.branch)
+        return False
+
+
 async def reconcile(
     *,
     active_chat_ids: set[str],
@@ -486,12 +504,22 @@ async def reconcile(
             if not state.get("exists"):
                 blockers.append(_blocker("worktree_missing", task.worktree_path))
             elif state.get("branch") and task.branch and state["branch"] != task.branch:
-                blockers.append(
-                    _blocker(
-                        "worktree_missing",
-                        f"{task.worktree_path} is on {state['branch']}, expected {task.branch}",
+                # The agent switched its own worktree to another branch. The
+                # worktree is fine, so adopt that branch unless another task
+                # holds it; only then is it a real blocker.
+                if await _adopt_branch(task, state["branch"]):
+                    fields["branch"] = state["branch"]
+                    fields["meta"] = _milestone(
+                        task.meta, "branch_adopted", previous=task.branch, branch=state["branch"]
                     )
-                )
+                else:
+                    blockers.append(
+                        _blocker(
+                            "worktree_missing",
+                            f"{task.worktree_path} is on {state['branch']}, expected "
+                            f"{task.branch} (base branch, or held by another task)",
+                        )
+                    )
         if blockers != (task.blockers or []):
             fields["blockers"] = blockers
         status = task.status
@@ -509,7 +537,8 @@ async def reconcile(
         if status != task.status:
             fields["status"] = status
             fields["meta"] = _milestone(
-                {**(task.meta or {}), "status_reason": "reconciled after restart"}, status
+                {**(fields.get("meta") or task.meta or {}), "status_reason": "reconciled after restart"},
+                status,
             )
         if fields:
             await CoordTask.update_fields(task.id, **fields)

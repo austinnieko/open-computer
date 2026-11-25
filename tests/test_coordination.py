@@ -409,6 +409,59 @@ class RecoveryTests(CoordinationTestCase):
         self.assertEqual(recovered.blockers, [])
         self.assertEqual(recovered.status, "paused")
 
+    async def test_worktree_switched_to_new_branch_is_adopted_not_blocked(self):
+        task = (await self.register("Renamed"))["task"]
+        await registry.set_status(task["id"], "running")
+        git(task["worktree_path"], "checkout", "-q", "-b", "task/renamed-by-agent")
+        await registry.reconcile(active_chat_ids=set())
+        reloaded = await CoordTask.get_by_id(task["id"])
+        self.assertEqual(reloaded.branch, "task/renamed-by-agent")
+        self.assertEqual(reloaded.blockers, [])
+        self.assertEqual(reloaded.status, "paused")
+        self.assertIn("branch_adopted", reloaded.meta["milestones"])
+        resources = {c.resource for c in await CoordClaim.for_task(task["id"])}
+        self.assertIn("branch:task/renamed-by-agent", resources)
+        self.assertNotIn(f"branch:{task['branch']}", resources)
+
+    async def test_stale_branch_blocker_clears_on_adoption(self):
+        task = (await self.register("Was blocked"))["task"]
+        git(task["worktree_path"], "checkout", "-q", "-b", "task/moved")
+        await CoordTask.update_fields(
+            task["id"],
+            status="blocked",
+            blockers=[{"kind": "worktree_missing", "detail": "old", "since": 1}],
+        )
+        await registry.reconcile(active_chat_ids=set())
+        reloaded = await CoordTask.get_by_id(task["id"])
+        self.assertEqual(reloaded.status, "paused")
+        self.assertEqual(reloaded.blockers, [])
+
+    async def test_switch_to_branch_held_by_another_task_still_blocks(self):
+        a = (await self.register("A"))["task"]
+        b = (await self.register("B"))["task"]
+        await registry.set_status(a["id"], "running")
+        git(a["worktree_path"], "checkout", "-q", "-b", "task/taken")
+        await CoordClaim.claim(b["repo_key"], b["id"], "branch", "branch:task/taken")
+        await registry.reconcile(active_chat_ids=set())
+        reloaded = await CoordTask.get_by_id(a["id"])
+        self.assertEqual(reloaded.status, "blocked")
+        self.assertEqual(reloaded.branch, a["branch"])
+        resources = {c.resource for c in await CoordClaim.for_task(a["id"])}
+        self.assertIn(f"branch:{a['branch']}", resources)
+
+    async def test_switch_to_base_branch_is_not_adopted(self):
+        task = (await self.register("On main"))["task"]
+        await registry.set_status(task["id"], "running")
+        git(task["worktree_path"], "checkout", "-q", "--detach")
+        git(task["worktree_path"], "branch", "-q", "-f", "main-copy")
+        reloaded_before = await CoordTask.get_by_id(task["id"])
+        await CoordTask.update_fields(task["id"], base_ref="main-copy")
+        git(task["worktree_path"], "checkout", "-q", "main-copy")
+        await registry.reconcile(active_chat_ids=set())
+        reloaded = await CoordTask.get_by_id(task["id"])
+        self.assertEqual(reloaded.status, "blocked")
+        self.assertEqual(reloaded.branch, reloaded_before.branch)
+
     async def test_dirty_worktree_survives_reconcile_and_reregistration(self):
         task = (await self.register("Dirty"))["task"]
         Path(task["worktree_path"], "wip.py").write_text("x = 1\n")
