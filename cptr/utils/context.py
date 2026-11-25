@@ -26,8 +26,43 @@ def estimate_messages_tokens(messages: list[dict]) -> int:
         # Tool call arguments
         for tc in m.get("tool_calls", []):
             total += estimate_tokens(tc.get("function", {}).get("arguments", ""))
+        # Replayed reasoning (thinking) is sent back to the model too.
+        for item in m.get("reasoning_items") or []:
+            total += _reasoning_tokens(item)
         total += 4  # per-message overhead (role, separators)
     return total
+
+
+def _reasoning_tokens(item) -> int:
+    if not isinstance(item, dict):
+        return 0
+    chars = 0
+    for key in ("summary", "content"):
+        for block in item.get(key) or []:
+            if isinstance(block, dict):
+                chars += len(str(block.get("text") or ""))
+            elif isinstance(block, str):
+                chars += len(block)
+    for key in ("text", "reasoning_content"):
+        if isinstance(item.get(key), str):
+            chars += len(item[key])
+    return chars // 4
+
+
+def compaction_keep_count(messages: list[dict], threshold: int) -> int:
+    """How many trailing messages to keep when compacting: about 40% of the
+    messages, but never more than about 40% of the threshold in tokens, so one
+    huge earlier reply cannot leave the kept part over the context window."""
+    by_count = max(2, len(messages) * 2 // 5)
+    budget = max(1, threshold * 2 // 5)
+    used = 0
+    by_tokens = 0
+    for m in reversed(messages):
+        used += estimate_messages_tokens([m])
+        if used > budget and by_tokens >= 2:
+            break
+        by_tokens += 1
+    return max(2, min(by_count, by_tokens))
 
 
 def should_compact(

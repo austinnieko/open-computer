@@ -23,6 +23,7 @@ from cptr.env import (
 )
 from cptr.utils.context import (
     build_context_usage,
+    compaction_keep_count,
     estimate_messages_tokens,
     estimate_tokens,
     normalize_usage,
@@ -1149,12 +1150,13 @@ async def _load_message_history(chat_id: str, message_id: str) -> tuple[list[dic
         cur = msg_map.get(cur.parent_id) if cur.parent_id else None
     chain.reverse()  # root → leaf
 
-    # Find the most recent message with a chat_summary
+    # Find the most recent message with a chat_summary (summaries are
+    # cumulative, so the latest one covers everything before it).
     existing_summary = None
-    for i, m in enumerate(chain):
-        if m.chat_summary:
+    for i in range(len(chain) - 1, -1, -1):
+        if chain[i].chat_summary:
+            existing_summary = chain[i].chat_summary
             chain = chain[i:]  # keep this message and everything after
-            existing_summary = m.chat_summary
             break
 
     result = []
@@ -1551,6 +1553,10 @@ def _find_safe_split(messages: list[dict], target_keep: int) -> int:
 
 
 def _summary_checkpoint_message_id(keep_zone: list[dict], fallback: str) -> str:
+    # The checkpoint must be where the keep zone starts: history is reloaded
+    # from it, so a later checkpoint would silently drop unsummarized messages.
+    if keep_zone and keep_zone[0].get("id"):
+        return keep_zone[0]["id"]
     for message in keep_zone:
         if message.get("role") == "user" and message.get("id"):
             return message["id"]
@@ -2545,7 +2551,9 @@ async def run_chat_task(
                 new_messages_since,
                 threshold=compact_token_threshold,
             ):
-                target_keep = max(2, len(messages) * 2 // 5)
+                target_keep = compaction_keep_count(
+                    messages, compact_token_threshold or resolve_compact_token_threshold()
+                )
                 split_idx = _find_safe_split(messages, target_keep)
                 drop_zone = messages[:split_idx]
                 keep_zone = messages[split_idx:]
